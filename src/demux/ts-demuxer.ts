@@ -38,6 +38,13 @@ import { KLVData, klv_parse } from './klv';
 import AV1OBUInMpegTsParser from './av1';
 import AV1OBUParser from './av1-parser';
 import { PGSData } from './pgs-data';
+import {
+    buildVP9VideoDetails,
+    hasVP9PrivateMappingV1,
+    parseVP9FrameHeader,
+    parseVP9SampleLayout,
+    VP9CodecConfiguration
+} from './vp9';
 
 type AdaptationFieldInfo = {
     discontinuity_indicator?: number;
@@ -348,6 +355,7 @@ class TSDemuxer extends BaseDemuxer {
                     if (pid === this.pmt_.common_pids.h264
                             || pid === this.pmt_.common_pids.h265
                             || pid === this.pmt_.common_pids.av1
+                            || pid === this.pmt_.common_pids.vp9
                             || pid === this.pmt_.common_pids.adts_aac
                             || pid === this.pmt_.common_pids.loas_aac
                             || pid === this.pmt_.common_pids.ac3
@@ -574,6 +582,7 @@ class TSDemuxer extends BaseDemuxer {
                 && stream_id !== 0xF2  // DSMCC
                 && stream_id !== 0xF8) {
             let PES_scrambling_control = (data[6] & 0x30) >>> 4;
+            let data_alignment_indicator = (data[6] & 0x04) >>> 2;
             let PTS_DTS_flags = (data[7] & 0xC0) >>> 6;
             let PES_header_data_length = data[8];
 
@@ -606,7 +615,14 @@ class TSDemuxer extends BaseDemuxer {
                     this.parseMP3Payload(payload, pts);
                     break;
                 case StreamType.kPESPrivateData:
-                    if (this.pmt_.common_pids.av1 === pes_data.pid) {
+                    if (this.pmt_.common_pids.vp9 === pes_data.pid) {
+                        if (stream_id !== 0xE0 || data_alignment_indicator !== 1) {
+                            Log.e(this.TAG,
+                                `VP9 private mapping v1 requires stream_id=0xE0 and data_alignment_indicator=1`);
+                            return;
+                        }
+                        this.parseVP9Payload(payload, pts, dts, pes_data.file_position, pes_data.random_access_indicator);
+                    } else if (this.pmt_.common_pids.av1 === pes_data.pid) {
                         this.parseAV1Payload(payload, pts, dts, pes_data.file_position, pes_data.random_access_indicator);
                     } else if (this.pmt_.common_pids.opus === pes_data.pid) {
                         this.parseOpusPayload(payload, pts);
@@ -793,7 +809,10 @@ class TSDemuxer extends BaseDemuxer {
                 offset += 2 + length;
             }
 
-            let already_has_video =  pmt.common_pids.h264 || pmt.common_pids.h265;
+            let already_has_video = pmt.common_pids.h264
+                || pmt.common_pids.h265
+                || pmt.common_pids.av1
+                || pmt.common_pids.vp9;
             if (stream_type === StreamType.kH264 && !already_has_video) {
                 pmt.common_pids.h264 = elementary_PID;
             } else if (stream_type === StreamType.kH265 && !already_has_video) {
@@ -816,6 +835,13 @@ class TSDemuxer extends BaseDemuxer {
             } else if (stream_type === StreamType.kPESPrivateData) {
                 pmt.pes_private_data_pids[elementary_PID] = true;
                 if (ES_info_length > 0) {
+                    const descriptors = data.subarray(i + 5, i + 5 + ES_info_length);
+                    if (!already_has_video
+                            && !pmt.common_pids.av1
+                            && hasVP9PrivateMappingV1(descriptors)) {
+                        pmt.common_pids.vp9 = elementary_PID;
+                    }
+
                     // parse descriptor for PES private data
                     for (let offset = i + 5; offset < i + 5 + ES_info_length; ) {
                         let tag = data[offset + 0];
@@ -878,7 +904,6 @@ class TSDemuxer extends BaseDemuxer {
                         offset += 2 + length;
                     }
                     // provide descriptor for PES private data via callback
-                    let descriptors = data.subarray(i + 5, i + 5 + ES_info_length);
                     this.dispatchPESPrivateDataDescriptor(elementary_PID, stream_type, descriptors);
                 }
             } else if (stream_type === StreamType.kMetadata) {
@@ -972,7 +997,7 @@ class TSDemuxer extends BaseDemuxer {
                 Log.v(this.TAG, `Parsed first PMT: ${JSON.stringify(pmt)}`);
             }
             this.pmt_ = pmt;
-            if (pmt.common_pids.h264 || pmt.common_pids.h265 || pmt.common_pids.av1) {
+            if (pmt.common_pids.h264 || pmt.common_pids.h265 || pmt.common_pids.av1 || pmt.common_pids.vp9) {
                 this.has_video_ = true;
             }
             if (pmt.common_pids.adts_aac || pmt.common_pids.loas_aac || pmt.common_pids.ac3 || pmt.common_pids.opus || pmt.common_pids.mp3) {
@@ -1001,6 +1026,100 @@ class TSDemuxer extends BaseDemuxer {
         if (this.onSCTE35Metadata) {
             this.onSCTE35Metadata(scte35);
         }
+    }
+
+    private parseVP9Payload(
+        data: Uint8Array,
+        pts: number,
+        dts: number,
+        file_position: number,
+        random_access_indicator: number
+    ): void {
+        if (pts == undefined || dts == undefined || data.byteLength === 0) {
+            Log.e(this.TAG, `VP9 private mapping v1 requires PTS/DTS and a non-empty payload`);
+            return;
+        }
+
+        const layout = parseVP9SampleLayout(data);
+        if (layout == null) {
+            Log.e(this.TAG, `Malformed VP9 superframe index`);
+            return;
+        }
+
+        const previous_config = this.video_metadata_.details?.vp9_config as VP9CodecConfiguration | undefined;
+        let current_config = previous_config;
+        let is_keyframe = false;
+        for (const frame of layout.frames) {
+            const header = parseVP9FrameHeader(frame, current_config);
+            if (header == null) {
+                Log.e(this.TAG, `Malformed VP9 uncompressed frame header`);
+                return;
+            }
+            is_keyframe ||= header.isKeyframe;
+            if (header.config != undefined) {
+                current_config = header.config;
+            }
+        }
+
+        if (is_keyframe && random_access_indicator !== 1) {
+            Log.e(this.TAG, `VP9 private mapping v1 requires RAI on a keyframe PES`);
+            return;
+        }
+
+        if (current_config != undefined) {
+            const details = buildVP9VideoDetails(current_config);
+            const previous_details = this.video_metadata_.details;
+            const metadata_changed = previous_details?.vp9_config != undefined
+                && this.isVP9ConfigurationChanged(previous_details.vp9_config, current_config);
+
+            if (!this.video_init_segment_dispatched_) {
+                this.video_metadata_.details = details;
+                this.dispatchVideoInitSegment();
+            } else if (metadata_changed) {
+                Log.v(this.TAG, `VP9: Codec configuration changed, attempt to re-generate InitSegment`);
+                this.video_metadata_changed_ = true;
+                this.dispatchVideoMediaSegment(true);
+                this.video_metadata_.details = details;
+                this.dispatchVideoInitSegment();
+            }
+        }
+
+        if (!this.video_init_segment_dispatched_) {
+            // A regular inter frame does not carry enough information for vpcC.
+            return;
+        }
+
+        const pts_ms = Math.floor(pts / this.timescale_);
+        const dts_ms = Math.floor(dts / this.timescale_);
+        const sample = {
+            units: [{data}],
+            length: data.byteLength,
+            isKeyframe: is_keyframe,
+            dts: dts_ms,
+            pts: pts_ms,
+            cts: pts_ms - dts_ms,
+            file_position
+        };
+        this.video_track_.samples.push(sample);
+        this.video_track_.length += data.byteLength;
+    }
+
+    private isVP9ConfigurationChanged(
+        previous: VP9CodecConfiguration,
+        current: VP9CodecConfiguration
+    ): boolean {
+        return previous.profile !== current.profile
+            || previous.level !== current.level
+            || previous.bitDepth !== current.bitDepth
+            || previous.chromaSubsampling !== current.chromaSubsampling
+            || previous.videoFullRangeFlag !== current.videoFullRangeFlag
+            || previous.colourPrimaries !== current.colourPrimaries
+            || previous.transferCharacteristics !== current.transferCharacteristics
+            || previous.matrixCoefficients !== current.matrixCoefficients
+            || previous.codecWidth !== current.codecWidth
+            || previous.codecHeight !== current.codecHeight
+            || previous.presentWidth !== current.presentWidth
+            || previous.presentHeight !== current.presentHeight;
     }
 
     private parseAV1Payload(data: Uint8Array, pts: number, dts: number, file_position: number, random_access_indicator: number) {
@@ -1275,11 +1394,18 @@ class TSDemuxer extends BaseDemuxer {
 
         let fps_den = meta.frameRate.fps_den;
         let fps_num = meta.frameRate.fps_num;
-        meta.refSampleDuration = 1000 * (fps_den / fps_num);
+        meta.refSampleDuration = details.ref_sample_duration != undefined
+            ? details.ref_sample_duration
+            : 1000 * (fps_den / fps_num);
 
         meta.codec = details.codec_mimetype;
 
-        if (this.video_metadata_.av1c) {
+        if (details.vpcc) {
+            meta.vpcc = details.vpcc;
+            if (this.video_init_segment_dispatched_ == false) {
+                Log.v(this.TAG, `Generated first VPCodecConfigurationRecord for mimeType: ${meta.codec}`);
+            }
+        } else if (this.video_metadata_.av1c) {
             meta.av1c = this.video_metadata_.av1c;
             if (this.video_init_segment_dispatched_ == false) {
                 Log.v(this.TAG, `Generated first AV1 for mimeType: ${meta.codec}`);

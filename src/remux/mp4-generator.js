@@ -25,6 +25,7 @@ class MP4 {
             avc1: [], avcC: [], btrt: [], dinf: [],
             dref: [], esds: [], ftyp: [], hdlr: [],
             hvc1: [], hvcC: [], av01: [], av1C: [],
+            vp09: [], vpcC: [],
             mdat: [], mdhd: [], mdia: [], mfhd: [],
             minf: [], moof: [], moov: [], mp4a: [],
             mvex: [], mvhd: [], sdtp: [], stbl: [],
@@ -342,6 +343,8 @@ class MP4 {
             return MP4.box(MP4.types.stsd, MP4.constants.STSD_PREFIX, MP4.hvc1(meta));
         } else if (meta.type === 'video' && meta.codec.startsWith('av01')) {
             return MP4.box(MP4.types.stsd, MP4.constants.STSD_PREFIX, MP4.av01(meta));
+        } else if (meta.type === 'video' && meta.codec.startsWith('vp09')) {
+            return MP4.box(MP4.types.stsd, MP4.constants.STSD_PREFIX, MP4.vp09(meta));
         } else {
             return MP4.box(MP4.types.stsd, MP4.constants.STSD_PREFIX, MP4.avc1(meta));
         }
@@ -727,6 +730,47 @@ class MP4 {
             0xFF, 0xFF               // pre_defined = -1
         ]);
         return MP4.box(MP4.types.av01, data, MP4.box(MP4.types.av1C, av1c));
+    }
+
+    static vp09(meta) {
+        let vpcc = meta.vpcc;
+        let width = meta.codecWidth, height = meta.codecHeight;
+
+        let data = new Uint8Array([
+            0x00, 0x00, 0x00, 0x00,  // reserved(4)
+            0x00, 0x00, 0x00, 0x01,  // reserved(2) + data_reference_index(2)
+            0x00, 0x00, 0x00, 0x00,  // pre_defined(2) + reserved(2)
+            0x00, 0x00, 0x00, 0x00,  // pre_defined: 3 * 4 bytes
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            (width >>> 8) & 0xFF,    // width: 2 bytes
+            (width) & 0xFF,
+            (height >>> 8) & 0xFF,   // height: 2 bytes
+            (height) & 0xFF,
+            0x00, 0x48, 0x00, 0x00,  // horizresolution: 4 bytes
+            0x00, 0x48, 0x00, 0x00,  // vertresolution: 4 bytes
+            0x00, 0x00, 0x00, 0x00,  // reserved: 4 bytes
+            0x00, 0x01,              // frame_count
+            0x0A,                    // strlen
+            0x56, 0x50, 0x43, 0x20,  // "VPC Coding"
+            0x43, 0x6F, 0x64, 0x69,
+            0x6E, 0x67, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00,
+            0x00, 0x18,              // depth
+            0xFF, 0xFF               // pre_defined = -1
+        ]);
+        let fullbox = new Uint8Array([
+            0x01, 0x00, 0x00, 0x00  // version(1) + flags
+        ]);
+        return MP4.box(
+            MP4.types.vp09,
+            data,
+            MP4.box(MP4.types.vpcC, fullbox, vpcc)
+        );
     }
 
     // Movie Extends box

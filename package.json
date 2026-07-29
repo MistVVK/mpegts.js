@@ -17,6 +17,7 @@
     "dvb"
   ],
   "scripts": {
+    "test": "node --require ./tests/register-source.cjs tests/vp9.test.cjs",
     "build": "webpack --mode=production --progress",
     "build:debug": "webpack --mode=development --progress",
     "watch": "webpack --mode=development --progress --watch",
