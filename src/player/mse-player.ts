@@ -102,6 +102,10 @@ class MSEPlayer {
         this._player_engine.switchSecondaryAudio();
     }
 
+    public switchAudioTrack(index: number): void {
+        this._player_engine.switchAudioTrack(index);
+    }
+
     public get type(): string {
         return this._type;
     }

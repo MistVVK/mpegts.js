@@ -310,16 +310,17 @@ class PlayerEngineDedicatedThread implements PlayerEngine {
     }
 
     public switchPrimaryAudio(): void {
-        this._worker.postMessage({
-            cmd: 'switch_audio',
-            audio_track: 'primary',
-        } as WorkerCommandPacketSwitchAudio);
+        this.switchAudioTrack(0);
     }
 
     public switchSecondaryAudio(): void {
+        this.switchAudioTrack(1);
+    }
+
+    public switchAudioTrack(index: number): void {
         this._worker.postMessage({
             cmd: 'switch_audio',
-            audio_track: 'secondary',
+            audio_track: index,
         } as WorkerCommandPacketSwitchAudio);
     }
 

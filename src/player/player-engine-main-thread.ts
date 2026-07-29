@@ -347,6 +347,10 @@ class PlayerEngineMainThread implements PlayerEngine {
         this._transmuxer.switchSecondaryAudio();
     }
 
+    public switchAudioTrack(index: number): void {
+        this._transmuxer.switchAudioTrack(index);
+    }
+
     public get mediaInfo(): MediaInfo {
         return Object.assign({}, this._media_info);
     }

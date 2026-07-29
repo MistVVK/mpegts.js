@@ -158,7 +158,7 @@ class TSDemuxer extends BaseDemuxer {
     private video_track_ = {type: 'video', id: 1, sequenceNumber: 0, samples: [], length: 0};
     private audio_track_ = {type: 'audio', id: 2, sequenceNumber: 0, samples: [], length: 0};
 
-    public preferred_secondary_audio = false;
+    public preferred_audio_track_index = 0;
 
     public constructor(probe_data: any, config: any) {
         super();
@@ -775,6 +775,7 @@ class TSDemuxer extends BaseDemuxer {
         let info_start_index = 12 + program_info_length;
         let info_bytes = section_length - 9 - program_info_length - 4;
 
+        const audio_streams: Array<{pid: number, stream_type: StreamType}> = [];
         for (let i = info_start_index; i < info_start_index + info_bytes; ) {
             let stream_type = data[i] as StreamType;
             let elementary_PID = ((data[i + 1] & 0x1F) << 8) | data[i + 2];
@@ -782,24 +783,36 @@ class TSDemuxer extends BaseDemuxer {
 
             pmt.pid_stream_type[elementary_PID] = stream_type;
 
-            let already_has_video =  pmt.common_pids.h264 || pmt.common_pids.h265;
-            let already_has_audio = pmt.common_pids.adts_aac || pmt.common_pids.loas_aac || pmt.common_pids.ac3 || pmt.common_pids.eac3 || pmt.common_pids.opus || pmt.common_pids.mp3;
+            // ARIB Stream Identifier Descriptor (tag 0x52) の component tag を保持する。
+            for (let offset = i + 5; offset < i + 5 + ES_info_length; ) {
+                const tag = data[offset];
+                const length = data[offset + 1];
+                if (tag === 0x52 && length >= 1) {
+                    pmt.pid_component_tag[elementary_PID] = data[offset + 2];
+                }
+                offset += 2 + length;
+            }
 
+            let already_has_video =  pmt.common_pids.h264 || pmt.common_pids.h265;
             if (stream_type === StreamType.kH264 && !already_has_video) {
                 pmt.common_pids.h264 = elementary_PID;
             } else if (stream_type === StreamType.kH265 && !already_has_video) {
                 pmt.common_pids.h265 = elementary_PID;
-            } else if (stream_type === StreamType.kADTSAAC && (!already_has_audio || this.preferred_secondary_audio)) {
-                pmt.common_pids.adts_aac = elementary_PID;
-            } else if (stream_type === StreamType.kLOASAAC && (!already_has_audio || this.preferred_secondary_audio)) {
-                pmt.common_pids.loas_aac = elementary_PID;
-            } else if (stream_type === StreamType.kAC3 && (!already_has_audio || this.preferred_secondary_audio)) {
-                pmt.common_pids.ac3 = elementary_PID; // ATSC AC-3
-            } else if (stream_type === StreamType.kEAC3 && (!already_has_audio || this.preferred_secondary_audio)) {
-                pmt.common_pids.eac3 = elementary_PID; // ATSC EAC-3
-            } else if ((stream_type === StreamType.kMPEG1Audio || stream_type === StreamType.kMPEG2Audio) &&
-                       (!already_has_audio || this.preferred_secondary_audio)) {
-                pmt.common_pids.mp3 = elementary_PID;
+            } else if (stream_type === StreamType.kADTSAAC) {
+                audio_streams.push({pid: elementary_PID, stream_type});
+                if (audio_streams.length - 1 === this.preferred_audio_track_index) pmt.common_pids.adts_aac = elementary_PID;
+            } else if (stream_type === StreamType.kLOASAAC) {
+                audio_streams.push({pid: elementary_PID, stream_type});
+                if (audio_streams.length - 1 === this.preferred_audio_track_index) pmt.common_pids.loas_aac = elementary_PID;
+            } else if (stream_type === StreamType.kAC3) {
+                audio_streams.push({pid: elementary_PID, stream_type});
+                if (audio_streams.length - 1 === this.preferred_audio_track_index) pmt.common_pids.ac3 = elementary_PID; // ATSC AC-3
+            } else if (stream_type === StreamType.kEAC3) {
+                audio_streams.push({pid: elementary_PID, stream_type});
+                if (audio_streams.length - 1 === this.preferred_audio_track_index) pmt.common_pids.eac3 = elementary_PID; // ATSC E-AC-3
+            } else if (stream_type === StreamType.kMPEG1Audio || stream_type === StreamType.kMPEG2Audio) {
+                audio_streams.push({pid: elementary_PID, stream_type});
+                if (audio_streams.length - 1 === this.preferred_audio_track_index) pmt.common_pids.mp3 = elementary_PID;
             } else if (stream_type === StreamType.kPESPrivateData) {
                 pmt.pes_private_data_pids[elementary_PID] = true;
                 if (ES_info_length > 0) {
@@ -920,7 +933,41 @@ class TSDemuxer extends BaseDemuxer {
             i += 5 + ES_info_length;
         }
 
+        // 選択中の音声トラックが PMT 更新で消えた場合は、同じ PMT の Track1 へ即時復帰する。
+        // UI 側から後で preferred_audio_track_index を戻すだけでは、次の PMT まで音声 PID が未選択になる。
+        if (audio_streams.length > 0 && this.preferred_audio_track_index >= audio_streams.length) {
+            Log.w(this.TAG,
+                `Selected audio track is no longer available, fallback to Track1: ` +
+                `selected=${this.preferred_audio_track_index + 1}, tracks=${audio_streams.length}`);
+            this.preferred_audio_track_index = 0;
+            const first_audio_stream = audio_streams[0];
+            if (first_audio_stream !== undefined) {
+                const {pid: elementary_PID, stream_type} = first_audio_stream;
+                if (stream_type === StreamType.kADTSAAC) pmt.common_pids.adts_aac = elementary_PID;
+                else if (stream_type === StreamType.kLOASAAC) pmt.common_pids.loas_aac = elementary_PID;
+                else if (stream_type === StreamType.kAC3) pmt.common_pids.ac3 = elementary_PID;
+                else if (stream_type === StreamType.kEAC3) pmt.common_pids.eac3 = elementary_PID;
+                else pmt.common_pids.mp3 = elementary_PID;
+            }
+        }
+
         if (program_number === this.current_program_) {
+            const previous_audio_track_count = this.media_info_.audioTrackCount;
+            const audio_stream_types = new Set([
+                StreamType.kMPEG1Audio,
+                StreamType.kMPEG2Audio,
+                StreamType.kADTSAAC,
+                StreamType.kLOASAAC,
+                StreamType.kAC3,
+                StreamType.kEAC3,
+            ]);
+            this.media_info_.audioTrackCount = Object.values(pmt.pid_stream_type).filter((stream_type) => {
+                return audio_stream_types.has(stream_type);
+            }).length;
+            this.media_info_.audioTrackComponentTags = Object.entries(pmt.pid_stream_type)
+                .filter(([, stream_type]) => audio_stream_types.has(stream_type))
+                .map(([pid]) => pmt.pid_component_tag[Number(pid)] ?? null);
+
             if (this.pmt_ == undefined) {
                 Log.v(this.TAG, `Parsed first PMT: ${JSON.stringify(pmt)}`);
             }
@@ -930,6 +977,13 @@ class TSDemuxer extends BaseDemuxer {
             }
             if (pmt.common_pids.adts_aac || pmt.common_pids.loas_aac || pmt.common_pids.ac3 || pmt.common_pids.opus || pmt.common_pids.mp3) {
                 this.has_audio_ = true;
+            }
+
+            // PMT が更新されて音声 PID 数が変化した場合は、Worker 外にも最新の MediaInfo を通知する。
+            if (previous_audio_track_count !== null &&
+                previous_audio_track_count !== this.media_info_.audioTrackCount &&
+                this.media_info_.isComplete()) {
+                this.onMediaInfo(this.media_info_);
             }
         }
     }

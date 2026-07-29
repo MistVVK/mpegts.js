@@ -34,6 +34,7 @@ export class PMT {
     pcr_pid: number;
     // pid -> stream_type
     pid_stream_type: PIDToStreamTypeMap = {};
+    pid_component_tag: {[pid: number]: number} = {};
 
     common_pids: {
         h264: number | undefined,

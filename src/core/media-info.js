@@ -31,6 +31,8 @@ class MediaInfo {
 
         this.audioSampleRate = null;
         this.audioChannelCount = null;
+        this.audioTrackCount = null;
+        this.audioTrackComponentTags = null;
 
         this.width = null;
         this.height = null;

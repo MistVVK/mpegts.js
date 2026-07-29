@@ -132,11 +132,7 @@ const PlayerEngineWorker = (self: DedicatedWorkerGlobalScope) => {
                 break;
             case 'switch_audio': {
                 const packet = command_packet as WorkerCommandPacketSwitchAudio;
-                if (packet.audio_track === 'primary') {
-                    transmuxer.switchPrimaryAudio();
-                } else if (packet.audio_track === 'secondary') {
-                    transmuxer.switchSecondaryAudio();
-                }
+                transmuxer.switchAudioTrack(packet.audio_track);
                 break;
             }
         }

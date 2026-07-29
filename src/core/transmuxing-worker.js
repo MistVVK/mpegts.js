@@ -104,11 +104,7 @@ let TransmuxingWorker = function (self) {
             }
             case 'switch_audio':
                 if (controller._demuxer instanceof TSDemuxer) {
-                    if (e.data.param === 'primary') {
-                        controller._demuxer.preferred_secondary_audio = false;
-                    } else if (e.data.param === 'secondary') {
-                        controller._demuxer.preferred_secondary_audio = true;
-                    }
+                    controller._demuxer.preferred_audio_track_index = e.data.param;
                 }
                 break;
         }

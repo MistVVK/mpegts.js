@@ -145,21 +145,19 @@ class Transmuxer {
     }
 
     switchPrimaryAudio() {
-        if (this._worker) {
-            this._worker.postMessage({cmd: 'switch_audio', param: 'primary'});
-        } else {
-            if (this._controller._demuxer instanceof TSDemuxer) {
-                this._controller._demuxer.preferred_secondary_audio = false;
-            }
-        }
+        this.switchAudioTrack(0);
     }
 
     switchSecondaryAudio() {
+        this.switchAudioTrack(1);
+    }
+
+    switchAudioTrack(index) {
         if (this._worker) {
-            this._worker.postMessage({cmd: 'switch_audio', param: 'secondary'});
+            this._worker.postMessage({cmd: 'switch_audio', param: index});
         } else {
             if (this._controller._demuxer instanceof TSDemuxer) {
-                this._controller._demuxer.preferred_secondary_audio = true;
+                this._controller._demuxer.preferred_audio_track_index = index;
             }
         }
     }
