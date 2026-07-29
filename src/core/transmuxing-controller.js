@@ -379,6 +379,7 @@ class TransmuxingController {
         if (timestamp_base == undefined) { return; }
 
         if (timed_id3_metadata.pts != undefined) {
+            timed_id3_metadata.original_pts = timed_id3_metadata.pts;
             timed_id3_metadata.pts -= timestamp_base;
         }
 
