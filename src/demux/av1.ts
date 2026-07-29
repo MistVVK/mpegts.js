@@ -16,88 +16,249 @@
  * limitations under the License.
  */
 
-import Log from "../utils/logger";
+const AV1_REGISTRATION_DESCRIPTOR = new Uint8Array([
+    0x05, 0x04, 0x41, 0x56, 0x30, 0x31  // registration_descriptor: "AV01"
+]);
+
+function bytesEqualAt(data: Uint8Array, offset: number, expected: Uint8Array): boolean {
+    if (offset < 0 || offset + expected.byteLength > data.byteLength) {
+        return false;
+    }
+    for (let i = 0; i < expected.byteLength; i++) {
+        if (data[offset + i] !== expected[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function encodeLEB128(value: number): Uint8Array {
+    const bytes: number[] = [];
+    do {
+        let byte = value & 0x7F;
+        value = Math.floor(value / 128);
+        if (value !== 0) {
+            byte |= 0x80;
+        }
+        bytes.push(byte);
+    } while (value !== 0);
+    return new Uint8Array(bytes);
+}
+
+/**
+ * Validate that one tsOBU contains exactly one OBU and make its size explicit
+ * for AV1 samples/configOBUs carried in ISO BMFF.
+ */
+export function normalizeAV1OBUForISOBMFF(data: Uint8Array): Uint8Array | null {
+    if (data.byteLength === 0 || (data[0] & 0x81) !== 0) {
+        return null;
+    }
+
+    const type = (data[0] & 0x78) >>> 3;
+    if (type === 0 || (type >= 8 && type <= 14)) {
+        return null;
+    }
+
+    const extension_flag = (data[0] & 0x04) !== 0;
+    const has_size_field = (data[0] & 0x02) !== 0;
+    const payload_offset = extension_flag ? 2 : 1;
+    if (payload_offset > data.byteLength
+            || (extension_flag && (data[1] & 0x07) !== 0)) {
+        return null;
+    }
+
+    if (has_size_field) {
+        let offset = payload_offset;
+        let payload_size = 0;
+        let multiplier = 1;
+        let terminated = false;
+        for (let byte_count = 0; byte_count < 8; byte_count++) {
+            if (offset >= data.byteLength) {
+                return null;
+            }
+            const value = data[offset++];
+            payload_size += (value & 0x7F) * multiplier;
+            if (!Number.isSafeInteger(payload_size)) {
+                return null;
+            }
+            if ((value & 0x80) === 0) {
+                terminated = true;
+                break;
+            }
+            multiplier *= 128;
+        }
+        return terminated && offset + payload_size === data.byteLength ? data : null;
+    }
+
+    const size = encodeLEB128(data.byteLength - payload_offset);
+    const normalized = new Uint8Array(data.byteLength + size.byteLength);
+    normalized[0] = data[0] | 0x02;
+    if (extension_flag) {
+        normalized[1] = data[1];
+    }
+    normalized.set(size, payload_offset);
+    normalized.set(data.subarray(payload_offset), payload_offset + size.byteLength);
+    return normalized;
+}
+
+/**
+ * Validate the mandatory AOM AV1 registration/video descriptor pair.
+ *
+ * The returned four bytes are normalized for AV1CodecConfigurationRecord:
+ * hdr_wcg_idc occupies reserved bits in av1C and is therefore cleared.
+ */
+export function parseAV1MPEG2TSDescriptors(descriptors: Uint8Array): Uint8Array | null {
+    if (!bytesEqualAt(descriptors, 0, AV1_REGISTRATION_DESCRIPTOR)) {
+        return null;
+    }
+
+    const video_descriptor_offset = AV1_REGISTRATION_DESCRIPTOR.byteLength;
+    if (video_descriptor_offset + 6 > descriptors.byteLength
+            || descriptors[video_descriptor_offset] !== 0x80
+            || descriptors[video_descriptor_offset + 1] !== 0x04) {
+        return null;
+    }
+
+    const configuration = descriptors.subarray(video_descriptor_offset + 2, video_descriptor_offset + 6);
+    if (configuration[0] !== 0x81) {  // marker=1, version=1
+        return null;
+    }
+    if ((configuration[1] >>> 5) > 2) {  // seq_profile
+        return null;
+    }
+    if ((configuration[3] & 0x20) !== 0) {  // reserved_zero
+        return null;
+    }
+    if ((configuration[3] & 0x10) === 0 && (configuration[3] & 0x0F) !== 0) {
+        return null;
+    }
+
+    // A truncated descriptor anywhere in the loop makes the mapping invalid.
+    for (let offset = video_descriptor_offset + 6; offset < descriptors.byteLength; ) {
+        if (offset + 2 > descriptors.byteLength) {
+            return null;
+        }
+        const descriptor_end = offset + 2 + descriptors[offset + 1];
+        if (descriptor_end > descriptors.byteLength) {
+            return null;
+        }
+        offset = descriptor_end;
+    }
+
+    return new Uint8Array([
+        configuration[0],
+        configuration[1],
+        configuration[2],
+        configuration[3] & 0x1F
+    ]);
+}
 
 export class AV1OBUInMpegTsParser {
 
-    private readonly TAG: string = "AV1OBUInMpegTsParser";
+    private readonly payloads_: Uint8Array[] = [];
+    private current_payload_index_: number = 0;
+    private valid_: boolean = true;
 
-    private data_: Uint8Array;
-    private current_startcode_offset_: number = 0;
-    private eof_flag_: boolean = false;
+    /**
+     * Remove MPEG-2 TS emulation-prevention bytes and validate forbidden
+     * start-code emulation sequences.
+     */
+    public static ebsp2rbsp(data: Uint8Array): Uint8Array | null {
+        const output = new Uint8Array(data.byteLength);
+        let output_offset = 0;
+        let consecutive_zeros = 0;
 
-    static _ebsp2rbsp(uint8array: Uint8Array) {
-        let src = uint8array;
-        let src_length = src.byteLength;
-        let dst = new Uint8Array(src_length);
-        let dst_idx = 0;
-
-        for (let i = 0; i < src_length; i++) {
-            if (i >= 2) {
-                // Unescape: Skip 0x03 after 00 00
-                if (src[i] === 0x03 && src[i - 1] === 0x00 && src[i - 2] === 0x00) {
+        for (let i = 0; i < data.byteLength; i++) {
+            const value = data[i];
+            if (consecutive_zeros >= 2) {
+                if (value === 0x03) {
+                    if (i + 1 >= data.byteLength || data[i + 1] > 0x03) {
+                        return null;
+                    }
+                    consecutive_zeros = 0;
                     continue;
                 }
+                if (value <= 0x02) {
+                    return null;
+                }
             }
-            dst[dst_idx] = src[i];
-            dst_idx++;
+
+            output[output_offset++] = value;
+            consecutive_zeros = value === 0x00 ? consecutive_zeros + 1 : 0;
         }
 
-        return new Uint8Array(dst.buffer, 0, dst_idx);
+        return output.subarray(0, output_offset);
     }
 
     public constructor(data: Uint8Array) {
-        this.data_ = data;
-        this.current_startcode_offset_ = this.findNextStartCodeOffset(0);
-        if (this.eof_flag_) {
-            Log.e(this.TAG, "Could not find AV1 startcode until payload end!");
-        }
+        this.parse(data);
     }
 
-    private findNextStartCodeOffset(start_offset: number) {
-        let i = start_offset;
-        let data = this.data_;
-
-        while (true) {
-            if (i + 2 >= data.byteLength) {
-                this.eof_flag_ = true;
-                return data.byteLength;
-            }
-
-            // search 00 00 01
-            let uint24 = (data[i + 0] << 16)
-                        | (data[i + 1] << 8)
-                        | (data[i + 2]);
-            if (uint24 === 0x000001) {
-                return i;
-            } else {
-                i++;
-            }
-        }
+    public isValid(): boolean {
+        return this.valid_;
     }
 
     public readNextOBUPayload(): Uint8Array | null {
-        let data = this.data_;
-        let payload: Uint8Array | null = null;
-
-        while (payload == null) {
-            if (this.eof_flag_) {
-                break;
-            }
-            // offset pointed to start code
-            let startcode_offset = this.current_startcode_offset_;
-
-            // nalu payload start offset
-            let offset = startcode_offset + 3;
-            let next_startcode_offset = this.findNextStartCodeOffset(offset);
-            this.current_startcode_offset_ = next_startcode_offset;
-
-            payload = AV1OBUInMpegTsParser._ebsp2rbsp(data.subarray(offset, next_startcode_offset));
+        if (!this.valid_ || this.current_payload_index_ >= this.payloads_.length) {
+            return null;
         }
-
-        return payload;
+        return this.payloads_[this.current_payload_index_++];
     }
 
+    private parse(data: Uint8Array): void {
+        if (data.byteLength < 4 || !this.hasStartCodeAt(data, 0)) {
+            this.valid_ = false;
+            return;
+        }
+
+        let start_code_offset = 0;
+        while (start_code_offset < data.byteLength) {
+            const payload_offset = start_code_offset + 3;
+            const next_start_code_offset = this.findNextStartCodeOffset(data, payload_offset);
+            if (payload_offset >= next_start_code_offset) {
+                this.valid_ = false;
+                this.payloads_.length = 0;
+                return;
+            }
+
+            const payload = AV1OBUInMpegTsParser.ebsp2rbsp(
+                data.subarray(payload_offset, next_start_code_offset)
+            );
+            if (payload == null || payload.byteLength === 0) {
+                this.valid_ = false;
+                this.payloads_.length = 0;
+                return;
+            }
+            const normalized_payload = normalizeAV1OBUForISOBMFF(payload);
+            if (normalized_payload == null) {
+                this.valid_ = false;
+                this.payloads_.length = 0;
+                return;
+            }
+            this.payloads_.push(normalized_payload);
+
+            if (next_start_code_offset === data.byteLength) {
+                break;
+            }
+            start_code_offset = next_start_code_offset;
+        }
+    }
+
+    private hasStartCodeAt(data: Uint8Array, offset: number): boolean {
+        return offset + 3 <= data.byteLength
+            && data[offset] === 0x00
+            && data[offset + 1] === 0x00
+            && data[offset + 2] === 0x01;
+    }
+
+    private findNextStartCodeOffset(data: Uint8Array, start_offset: number): number {
+        for (let offset = start_offset; offset + 3 <= data.byteLength; offset++) {
+            if (this.hasStartCodeAt(data, offset)) {
+                return offset;
+            }
+        }
+        return data.byteLength;
+    }
 }
 
 export default AV1OBUInMpegTsParser;

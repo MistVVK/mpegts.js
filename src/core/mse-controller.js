@@ -22,6 +22,10 @@ import Browser from '../utils/browser.js';
 import MSEEvents from './mse-events';
 import {IllegalStateException} from '../utils/exception.js';
 
+export function formatMSECodec(codec, isSafari) {
+    return codec === 'opus' && isSafari ? 'Opus' : codec;
+}
+
 // Media Source Extensions controller
 class MSEController {
 
@@ -226,10 +230,7 @@ class MSEController {
         let is = initSegment;
         let mimeType = `${is.container}`;
         if (is.codec && is.codec.length > 0) {
-            if (is.codec === 'opus' && Browser.safari) {
-                is.codec = 'Opus';
-            }
-            mimeType += `;codecs=${is.codec}`;
+            mimeType += `;codecs=${formatMSECodec(is.codec, Browser.safari)}`;
         }
 
         let firstInitSegment = false;

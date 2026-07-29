@@ -35,8 +35,13 @@ import { SMPTE2038Data, smpte2038parse } from './smpte2038';
 import { MP3Data } from './mp3';
 import { AC3Config, AC3Frame, AC3Parser, EAC3Config, EAC3Frame, EAC3Parser } from './ac3';
 import { KLVData, klv_parse } from './klv';
-import AV1OBUInMpegTsParser from './av1';
-import AV1OBUParser from './av1-parser';
+import AV1OBUInMpegTsParser, { parseAV1MPEG2TSDescriptors } from './av1';
+import AV1OBUParser, { AV1Metadata } from './av1-parser';
+import {
+    OpusMPEG2TSMetadata,
+    parseOpusMPEG2TSAccessUnits,
+    parseOpusMPEG2TSDescriptors
+} from './opus';
 import { PGSData } from './pgs-data';
 import {
     buildVP9VideoDetails,
@@ -74,12 +79,8 @@ type EAC3AudioMetadata = {
     channel_mode: number;
     num_blks: number;
 };
-type OpusAudioMetadata = {
-    codec: 'opus';
-    channel_count: number;
-    channel_config_code: number;
-    sample_rate: number;
-}
+type OpusAudioMetadata = OpusMPEG2TSMetadata;
+type AudioStreamKind = 'adts_aac' | 'loas_aac' | 'ac3' | 'eac3' | 'mp3' | 'opus';
 type MP3AudioMetadata = {
     codec: 'mp3',
     object_type: number,
@@ -153,7 +154,10 @@ class TSDemuxer extends BaseDemuxer {
     private timestamp_offset_: number = 0;
 
     private audio_last_sample_pts_: number = undefined;
+    private opus_next_sample_pts_: number = undefined;
     private aac_last_incomplete_data_: Uint8Array = null;
+    private selected_audio_pid_: number = undefined;
+    private selected_audio_kind_: AudioStreamKind = undefined;
 
     private has_video_ = false;
     private has_audio_ = false;
@@ -623,8 +627,18 @@ class TSDemuxer extends BaseDemuxer {
                         }
                         this.parseVP9Payload(payload, pts, dts, pes_data.file_position, pes_data.random_access_indicator);
                     } else if (this.pmt_.common_pids.av1 === pes_data.pid) {
+                        if (stream_id !== 0xBD || data_alignment_indicator !== 1 || pts == undefined) {
+                            Log.e(this.TAG,
+                                `AV1 MPEG-2 TS mapping requires stream_id=0xBD, ` +
+                                `data_alignment_indicator=1 and PTS`);
+                            return;
+                        }
                         this.parseAV1Payload(payload, pts, dts, pes_data.file_position, pes_data.random_access_indicator);
                     } else if (this.pmt_.common_pids.opus === pes_data.pid) {
+                        if (stream_id !== 0xBD) {
+                            Log.e(this.TAG, `Opus MPEG-2 TS mapping requires stream_id=0xBD`);
+                            return;
+                        }
                         this.parseOpusPayload(payload, pts);
                     } else if (this.pmt_.common_pids.ac3 === pes_data.pid) {
                         this.parseAC3Payload(payload, pts);
@@ -791,7 +805,14 @@ class TSDemuxer extends BaseDemuxer {
         let info_start_index = 12 + program_info_length;
         let info_bytes = section_length - 9 - program_info_length - 4;
 
-        const audio_streams: Array<{pid: number, stream_type: StreamType}> = [];
+        type PMTAudioStream = {
+            pid: number;
+            stream_type: StreamType;
+            kind: AudioStreamKind;
+            opus_metadata?: OpusMPEG2TSMetadata;
+        };
+        const audio_streams: PMTAudioStream[] = [];
+        let selected_audio_stream: PMTAudioStream | undefined;
         for (let i = info_start_index; i < info_start_index + info_bytes; ) {
             let stream_type = data[i] as StreamType;
             let elementary_PID = ((data[i + 1] & 0x1F) << 8) | data[i + 2];
@@ -818,28 +839,35 @@ class TSDemuxer extends BaseDemuxer {
             } else if (stream_type === StreamType.kH265 && !already_has_video) {
                 pmt.common_pids.h265 = elementary_PID;
             } else if (stream_type === StreamType.kADTSAAC) {
-                audio_streams.push({pid: elementary_PID, stream_type});
-                if (audio_streams.length - 1 === this.preferred_audio_track_index) pmt.common_pids.adts_aac = elementary_PID;
+                audio_streams.push({pid: elementary_PID, stream_type, kind: 'adts_aac'});
             } else if (stream_type === StreamType.kLOASAAC) {
-                audio_streams.push({pid: elementary_PID, stream_type});
-                if (audio_streams.length - 1 === this.preferred_audio_track_index) pmt.common_pids.loas_aac = elementary_PID;
+                audio_streams.push({pid: elementary_PID, stream_type, kind: 'loas_aac'});
             } else if (stream_type === StreamType.kAC3) {
-                audio_streams.push({pid: elementary_PID, stream_type});
-                if (audio_streams.length - 1 === this.preferred_audio_track_index) pmt.common_pids.ac3 = elementary_PID; // ATSC AC-3
+                audio_streams.push({pid: elementary_PID, stream_type, kind: 'ac3'}); // ATSC AC-3
             } else if (stream_type === StreamType.kEAC3) {
-                audio_streams.push({pid: elementary_PID, stream_type});
-                if (audio_streams.length - 1 === this.preferred_audio_track_index) pmt.common_pids.eac3 = elementary_PID; // ATSC E-AC-3
+                audio_streams.push({pid: elementary_PID, stream_type, kind: 'eac3'}); // ATSC E-AC-3
             } else if (stream_type === StreamType.kMPEG1Audio || stream_type === StreamType.kMPEG2Audio) {
-                audio_streams.push({pid: elementary_PID, stream_type});
-                if (audio_streams.length - 1 === this.preferred_audio_track_index) pmt.common_pids.mp3 = elementary_PID;
+                audio_streams.push({pid: elementary_PID, stream_type, kind: 'mp3'});
             } else if (stream_type === StreamType.kPESPrivateData) {
                 pmt.pes_private_data_pids[elementary_PID] = true;
                 if (ES_info_length > 0) {
                     const descriptors = data.subarray(i + 5, i + 5 + ES_info_length);
-                    if (!already_has_video
-                            && !pmt.common_pids.av1
-                            && hasVP9PrivateMappingV1(descriptors)) {
+                    const av1_configuration = parseAV1MPEG2TSDescriptors(descriptors);
+                    const opus_metadata = parseOpusMPEG2TSDescriptors(descriptors);
+
+                    if (!already_has_video && av1_configuration != null) {
+                        pmt.common_pids.av1 = elementary_PID;
+                        pmt.av1_codec_configuration = av1_configuration;
+                    } else if (!already_has_video && hasVP9PrivateMappingV1(descriptors)) {
                         pmt.common_pids.vp9 = elementary_PID;
+                    }
+                    if (opus_metadata != null) {
+                        audio_streams.push({
+                            pid: elementary_PID,
+                            stream_type,
+                            kind: 'opus',
+                            opus_metadata
+                        });
                     }
 
                     // parse descriptor for PES private data
@@ -856,48 +884,8 @@ class TSDemuxer extends BaseDemuxer {
                             } */ /* else if (registration === 'EC-3' && !alrady_has_audio) {
                                 pmt.common_pids.eac3 = elementary_PID; // DVB EAC-3 (FIXME: NEED VERIFY)
                             } */
-                            else if (registration === 'AV01') {
-                                pmt.common_pids.av1 = elementary_PID;
-                            } else if (registration === 'Opus') {
-                                pmt.common_pids.opus = elementary_PID;
-                            } else if (registration === 'KLVA') {
+                            else if (registration === 'KLVA') {
                                 pmt.asynchronous_klv_pids[elementary_PID] = true;
-                            }
-                        } else if (tag === 0x7F) {  // DVB extension descriptor
-                            if (elementary_PID === pmt.common_pids.opus) {
-                                let ext_desc_tag = data[offset + 2];
-                                let channel_config_code: number | null = null;
-                                if (ext_desc_tag === 0x80) { // User defined (provisional Opus)
-                                    channel_config_code = data[offset + 3];
-                                }
-
-                                if (channel_config_code == null) {
-                                    Log.e(this.TAG, `Not Supported Opus channel count.`);
-                                    continue;
-                                }
-
-                                const meta = {
-                                    codec: 'opus',
-                                    channel_count: (channel_config_code & 0x0F) === 0 ? 2 : (channel_config_code & 0x0F),
-                                    channel_config_code,
-                                    sample_rate: 48000
-                                } as const;
-                                const sample = {
-                                    codec: 'opus',
-                                    meta
-                                } as const;
-
-                                if (this.audio_init_segment_dispatched_ == false || this.detectAudioMetadataChange(sample)) {
-                                    this.audio_metadata_ = meta;
-                                    // flush stashed frames before notify new AudioSpecificConfig
-                                    this.dispatchAudioMediaSegment(true);
-                                    // notify new AAC AudioSpecificConfig
-                                    this.dispatchAudioInitSegment(sample);
-                                }
-                            }
-                        } else if (tag === 0x80) {
-                            if (elementary_PID === pmt.common_pids.av1) {
-                                this.video_metadata_.av1c = data.subarray(offset + 2, offset + 2 + length)
                             }
                         }
 
@@ -960,38 +948,43 @@ class TSDemuxer extends BaseDemuxer {
 
         // 選択中の音声トラックが PMT 更新で消えた場合は、同じ PMT の Track1 へ即時復帰する。
         // UI 側から後で preferred_audio_track_index を戻すだけでは、次の PMT まで音声 PID が未選択になる。
-        if (audio_streams.length > 0 && this.preferred_audio_track_index >= audio_streams.length) {
-            Log.w(this.TAG,
-                `Selected audio track is no longer available, fallback to Track1: ` +
-                `selected=${this.preferred_audio_track_index + 1}, tracks=${audio_streams.length}`);
-            this.preferred_audio_track_index = 0;
-            const first_audio_stream = audio_streams[0];
-            if (first_audio_stream !== undefined) {
-                const {pid: elementary_PID, stream_type} = first_audio_stream;
-                if (stream_type === StreamType.kADTSAAC) pmt.common_pids.adts_aac = elementary_PID;
-                else if (stream_type === StreamType.kLOASAAC) pmt.common_pids.loas_aac = elementary_PID;
-                else if (stream_type === StreamType.kAC3) pmt.common_pids.ac3 = elementary_PID;
-                else if (stream_type === StreamType.kEAC3) pmt.common_pids.eac3 = elementary_PID;
-                else pmt.common_pids.mp3 = elementary_PID;
+        if (audio_streams.length > 0) {
+            if (this.preferred_audio_track_index < 0
+                    || this.preferred_audio_track_index >= audio_streams.length) {
+                Log.w(this.TAG,
+                    `Selected audio track is no longer available, fallback to Track1: ` +
+                    `selected=${this.preferred_audio_track_index + 1}, tracks=${audio_streams.length}`);
+                this.preferred_audio_track_index = 0;
             }
+
+            selected_audio_stream = audio_streams[this.preferred_audio_track_index];
+            pmt.common_pids[selected_audio_stream.kind] = selected_audio_stream.pid;
         }
 
         if (program_number === this.current_program_) {
             const previous_audio_track_count = this.media_info_.audioTrackCount;
-            const audio_stream_types = new Set([
-                StreamType.kMPEG1Audio,
-                StreamType.kMPEG2Audio,
-                StreamType.kADTSAAC,
-                StreamType.kLOASAAC,
-                StreamType.kAC3,
-                StreamType.kEAC3,
-            ]);
-            this.media_info_.audioTrackCount = Object.values(pmt.pid_stream_type).filter((stream_type) => {
-                return audio_stream_types.has(stream_type);
-            }).length;
-            this.media_info_.audioTrackComponentTags = Object.entries(pmt.pid_stream_type)
-                .filter(([, stream_type]) => audio_stream_types.has(stream_type))
-                .map(([pid]) => pmt.pid_component_tag[Number(pid)] ?? null);
+            this.media_info_.audioTrackCount = audio_streams.length;
+            this.media_info_.audioTrackComponentTags = audio_streams
+                .map(({pid}) => pmt.pid_component_tag[pid] ?? null);
+
+            const selected_audio_changed = this.selected_audio_pid_ != undefined
+                && (this.selected_audio_pid_ !== selected_audio_stream?.pid
+                    || this.selected_audio_kind_ !== selected_audio_stream?.kind);
+            if (selected_audio_changed) {
+                // 同一 codec/config の別 PID でも、旧 PID の sample・補間 PTS・
+                // 未完 AAC frame を新しいトラックへ持ち越してはいけない。
+                this.dispatchAudioMediaSegment(true);
+                this.audio_last_sample_pts_ = undefined;
+                this.opus_next_sample_pts_ = undefined;
+                this.aac_last_incomplete_data_ = null;
+                this.loas_previous_frame = null;
+                delete this.pes_slice_queues_[this.selected_audio_pid_];
+                if (selected_audio_stream != undefined) {
+                    delete this.pes_slice_queues_[selected_audio_stream.pid];
+                }
+            }
+            this.selected_audio_pid_ = selected_audio_stream?.pid;
+            this.selected_audio_kind_ = selected_audio_stream?.kind;
 
             if (this.pmt_ == undefined) {
                 Log.v(this.TAG, `Parsed first PMT: ${JSON.stringify(pmt)}`);
@@ -1000,8 +993,19 @@ class TSDemuxer extends BaseDemuxer {
             if (pmt.common_pids.h264 || pmt.common_pids.h265 || pmt.common_pids.av1 || pmt.common_pids.vp9) {
                 this.has_video_ = true;
             }
-            if (pmt.common_pids.adts_aac || pmt.common_pids.loas_aac || pmt.common_pids.ac3 || pmt.common_pids.opus || pmt.common_pids.mp3) {
+            if (pmt.common_pids.adts_aac || pmt.common_pids.loas_aac || pmt.common_pids.ac3
+                    || pmt.common_pids.eac3 || pmt.common_pids.opus || pmt.common_pids.mp3) {
                 this.has_audio_ = true;
+            }
+
+            if (selected_audio_stream?.kind === 'opus') {
+                const meta = selected_audio_stream.opus_metadata!;
+                const sample = {codec: 'opus', meta} as const;
+                if (!this.audio_init_segment_dispatched_ || this.detectAudioMetadataChange(sample)) {
+                    this.dispatchAudioMediaSegment(true);
+                    this.audio_metadata_ = meta;
+                    this.dispatchAudioInitSegment(sample);
+                }
             }
 
             // PMT が更新されて音声 PID 数が変化した場合は、Worker 外にも最新の MediaInfo を通知する。
@@ -1123,64 +1127,160 @@ class TSDemuxer extends BaseDemuxer {
     }
 
     private parseAV1Payload(data: Uint8Array, pts: number, dts: number, file_position: number, random_access_indicator: number) {
-        let av1_in_ts_parser = new AV1OBUInMpegTsParser(data);
-        let payload: Uint8Array | null = null;
-        let units: {data: Uint8Array}[] = [];
+        const descriptor_configuration = this.pmt_.av1_codec_configuration;
+        if (descriptor_configuration == null || data.byteLength === 0) {
+            Log.e(this.TAG, `AV1 descriptor configuration or payload is missing`);
+            return;
+        }
+
+        const av1_in_ts_parser = new AV1OBUInMpegTsParser(data);
+        if (!av1_in_ts_parser.isValid()) {
+            Log.e(this.TAG, `Malformed AV1 MPEG-2 TS start-code payload`);
+            return;
+        }
+
+        const previous_details = this.video_metadata_.details as AV1Metadata | undefined;
+        let details = previous_details ?? null;
+        let payload: Uint8Array | null;
+        const units: {data: Uint8Array}[] = [];
         let length = 0;
+        let has_sequence_header = false;
+        let has_frame = false;
         let keyframe = false;
 
-        let details = null;
         while ((payload = av1_in_ts_parser.readNextOBUPayload()) != null) {
-            details = AV1OBUParser.parseOBUs(payload, this.video_metadata_.details);
+            const result = AV1OBUParser.parseOBUsWithStatus(payload, details);
+            if (!result.valid) {
+                Log.e(this.TAG, `Malformed or unsupported AV1 OBU payload`);
+                return;
+            }
+            details = result.metadata;
+            has_sequence_header ||= result.hasSequenceHeader;
+            has_frame ||= result.hasFrame;
+            keyframe ||= result.isKeyframe;
+            units.push({data: payload});
+            length += payload.byteLength;
+        }
 
-            if (details && details.keyframe === true) {
-                if (!this.video_init_segment_dispatched_) {
-                    const av1c = new Uint8Array((new ArrayBuffer(this.video_metadata_.av1c.byteLength + details.sequence_header_data.byteLength)));
-                    av1c.set(this.video_metadata_.av1c, 0);
-                    av1c.set(details.sequence_header_data, this.video_metadata_.av1c.byteLength);
-                    details.av1c = av1c;
+        if (!has_frame || details == null
+                || details.codec_size == null
+                || details.present_size == null
+                || details.sar_ratio == null
+                || !this.isAV1DescriptorCompatible(descriptor_configuration, details)) {
+            Log.e(this.TAG, `AV1 access unit is incomplete or conflicts with its PMT descriptor`);
+            return;
+        }
+        if (keyframe && random_access_indicator !== 1) {
+            Log.e(this.TAG, `AV1 random access frame requires random_access_indicator=1`);
+            return;
+        }
 
-                    this.video_metadata_.details = details;
-                    this.dispatchVideoInitSegment();
-                } else if (this.detectVideoMetadataChange(null, details) === true) {
-                    this.video_metadata_changed_ = true;
-                    // flush stashed frames before changing codec metadata
-                    this.dispatchVideoMediaSegment(true);
+        const previous_is_av1 = previous_details?.sequence_header != null
+            && this.video_metadata_.av1c != null;
+        const descriptor_changed = !previous_is_av1
+            || !this.bytesEqual(
+                this.video_metadata_.av1c!.subarray(0, descriptor_configuration.byteLength),
+                descriptor_configuration
+            );
+        const sequence_header_changed = has_sequence_header && previous_is_av1
+            && this.isAV1ConfigurationChanged(previous_details!, details);
+        const configuration_changed = !previous_is_av1
+            || descriptor_changed
+            || sequence_header_changed;
 
-                    const av1c = new Uint8Array((new ArrayBuffer(this.video_metadata_.av1c.byteLength + details.sequence_header_data.byteLength)));
-                    av1c.set(this.video_metadata_.av1c, 0);
-                    av1c.set(details.sequence_header_data, this.video_metadata_.av1c.byteLength);
-                    details.av1c = av1c;
-                    // notify new codec metadata (maybe changed)
-                    this.dispatchVideoInitSegment();
-                }
+        if (keyframe && has_sequence_header) {
+            const av1c = new Uint8Array(
+                descriptor_configuration.byteLength + details.sequence_header_data.byteLength
+            );
+            av1c.set(descriptor_configuration, 0);
+            av1c.set(details.sequence_header_data, descriptor_configuration.byteLength);
+
+            if (!this.video_init_segment_dispatched_) {
+                this.video_metadata_.details = details;
+                this.video_metadata_.av1c = av1c;
+                this.dispatchVideoInitSegment();
+            } else if (configuration_changed) {
+                this.video_metadata_changed_ = true;
+                this.dispatchVideoMediaSegment(true);
+                this.video_metadata_.details = details;
+                this.video_metadata_.av1c = av1c;
+                this.dispatchVideoInitSegment();
+            } else {
+                this.video_metadata_.details = details;
+            }
+        } else {
+            // PMT/sequence header が変化した構成は、新しい sequence header を伴う
+            // random-access AU からのみ開始する。旧 av1C のまま sample を流さない。
+            if (!this.video_init_segment_dispatched_ || configuration_changed) {
+                return;
             }
             this.video_metadata_.details = details;
-
-            //if (this.video_init_segment_dispatched_) {
-                keyframe ||= details.keyframe;
-                units.push({ data: payload });
-                length += payload.byteLength;
-            //}
         }
 
-        let pts_ms = Math.floor(pts / this.timescale_);
-        let dts_ms = Math.floor(dts / this.timescale_);
+        const pts_ms = Math.floor(pts / this.timescale_);
+        const dts_ms = Math.floor(dts / this.timescale_);
+        const av1_sample = {
+            units,
+            length,
+            isKeyframe: keyframe,
+            dts: dts_ms,
+            pts: pts_ms,
+            cts: pts_ms - dts_ms,
+            file_position
+        };
+        this.video_track_.samples.push(av1_sample);
+        this.video_track_.length += length;
+    }
 
-        if (units.length) {
-            let track = this.video_track_;
-            let av1_sample = {
-                units,
-                length,
-                isKeyframe: keyframe,
-                dts: dts_ms,
-                pts: pts_ms,
-                cts: pts_ms - dts_ms,
-                file_position
-            };
-            track.samples.push(av1_sample);
-            track.length += length;
+    private isAV1DescriptorCompatible(configuration: Uint8Array, details: AV1Metadata): boolean {
+        if (configuration.byteLength !== 4) {
+            return false;
         }
+
+        const profile = configuration[1] >>> 5;
+        const level = configuration[1] & 0x1F;
+        const tier = configuration[2] >>> 7;
+        const high_bitdepth = (configuration[2] >>> 6) & 0x01;
+        const twelve_bit = (configuration[2] >>> 5) & 0x01;
+        const bit_depth = high_bitdepth === 0 ? 8 : (profile === 2 && twelve_bit === 1 ? 12 : 10);
+
+        return profile === details.profile_idc
+            && level === details.level
+            && tier === details.tier
+            && bit_depth === details.bit_depth
+            && ((configuration[2] >>> 4) & 0x01) === Number(details.mono_chrome)
+            && ((configuration[2] >>> 3) & 0x01) === details.subsampling_x
+            && ((configuration[2] >>> 2) & 0x01) === details.subsampling_y
+            && (configuration[2] & 0x03) === details.chroma_sample_position;
+    }
+
+    private isAV1ConfigurationChanged(previous: AV1Metadata, current: AV1Metadata): boolean {
+        if (previous.codec_mimetype !== current.codec_mimetype
+                || previous.codec_size?.width !== current.codec_size?.width
+                || previous.codec_size?.height !== current.codec_size?.height
+                || previous.present_size?.width !== current.present_size?.width
+                || previous.present_size?.height !== current.present_size?.height
+                || previous.sequence_header_data.byteLength !== current.sequence_header_data.byteLength) {
+            return true;
+        }
+        for (let i = 0; i < previous.sequence_header_data.byteLength; i++) {
+            if (previous.sequence_header_data[i] !== current.sequence_header_data[i]) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private bytesEqual(first: Uint8Array, second: Uint8Array): boolean {
+        if (first.byteLength !== second.byteLength) {
+            return false;
+        }
+        for (let i = 0; i < first.byteLength; i++) {
+            if (first[i] !== second[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private parseH264Payload(data: Uint8Array, pts: number, dts: number, file_position: number, random_access_indicator: number) {
@@ -1817,62 +1917,48 @@ class TSDemuxer extends BaseDemuxer {
             return;
         }
 
-        let ref_sample_duration: number;
-        let base_pts_ms: number;
+        if (this.audio_metadata_.codec !== 'opus') {
+            return;
+        }
 
+        const access_units = parseOpusMPEG2TSAccessUnits(data);
+        if (access_units == null) {
+            Log.e(this.TAG, `Malformed Opus MPEG-2 TS access unit framing`);
+            return;
+        }
+
+        let sample_pts_ms: number;
         if (pts != undefined) {
-            base_pts_ms = pts / this.timescale_;
-        }
-        if (this.audio_metadata_.codec === 'opus') {
-            if (pts == undefined && this.audio_last_sample_pts_ != undefined) {
-                ref_sample_duration = 20;
-                base_pts_ms = this.audio_last_sample_pts_ + ref_sample_duration;
-            } else if (pts == undefined){
-                Log.w(this.TAG, `Opus: Unknown pts`);
-                return;
-            }
+            sample_pts_ms = pts / this.timescale_;
+        } else if (this.opus_next_sample_pts_ != undefined) {
+            sample_pts_ms = this.opus_next_sample_pts_;
+        } else {
+            Log.w(this.TAG, `Opus: Unknown pts`);
+            return;
         }
 
-        let sample_pts_ms = base_pts_ms;
-        let last_sample_pts_ms: number;
-
-        for (let offset = 0; offset < data.length; ) {
-            ref_sample_duration = 20;
-
-            const opus_pending_trim_start = (data[offset + 1] & 0x10) !== 0;
-            const trim_end = (data[offset + 1] & 0x08) !== 0;
-            let index = offset + 2;
-            let size = 0;
-
-            while (data[index] === 0xFF) {
-              size += 255;
-              index += 1;
-            }
-            size += data[index];
-            index += 1;
-            index += opus_pending_trim_start ? 2 : 0;
-            index += trim_end ? 2 : 0;
-
-            last_sample_pts_ms = sample_pts_ms;
-            let sample_pts_ms_int = Math.floor(sample_pts_ms);
-            let sample = data.slice(index, index + size)
-
-            let opus_sample = {
-                unit: sample,
-                length: sample.byteLength,
-                pts: sample_pts_ms_int,
-                dts: sample_pts_ms_int
+        let next_sample_pts_ms = sample_pts_ms;
+        const samples = access_units.map((access_unit) => {
+            const timestamp = Math.floor(next_sample_pts_ms);
+            const sample = {
+                unit: access_unit.data,
+                length: access_unit.data.byteLength,
+                pts: timestamp,
+                dts: timestamp,
+                duration: access_unit.duration_ms,
+                trimStart: access_unit.trim_start,
+                trimEnd: access_unit.trim_end
             };
-            this.audio_track_.samples.push(opus_sample);
-            this.audio_track_.length += sample.byteLength;
+            next_sample_pts_ms += access_unit.duration_ms;
+            return sample;
+        });
 
-            sample_pts_ms += ref_sample_duration;
-            offset = index + size;
+        for (const sample of samples) {
+            this.audio_track_.samples.push(sample);
+            this.audio_track_.length += sample.length;
         }
-
-        if (last_sample_pts_ms) {
-            this.audio_last_sample_pts_ = last_sample_pts_ms;
-        }
+        this.audio_last_sample_pts_ = samples[samples.length - 1].pts;
+        this.opus_next_sample_pts_ = next_sample_pts_ms;
     }
 
     private parseMP3Payload(data: Uint8Array, pts: number) {
@@ -2037,6 +2123,12 @@ class TSDemuxer extends BaseDemuxer {
             if (data.channel_count !== this.audio_metadata_.channel_count) {
                 Log.v(this.TAG, `Opus: Channel count changed from ` +
                                 `${this.audio_metadata_.channel_count} to ${data.channel_count}`);
+                return true;
+            }
+
+            if (data.channel_config_code !== this.audio_metadata_.channel_config_code) {
+                Log.v(this.TAG, `Opus: Channel configuration changed from ` +
+                                `${this.audio_metadata_.channel_config_code} to ${data.channel_config_code}`);
                 return true;
             }
         } else if (sample.codec === 'mp3' && this.audio_metadata_.codec === 'mp3') {

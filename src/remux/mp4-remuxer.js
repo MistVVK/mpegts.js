@@ -363,12 +363,17 @@ class MP4Remuxer {
             let needFillSilentFrames = false;
             let silentFrames = null;
             let sampleDuration = 0;
+            // Opus は packet ごとに 2.5〜120 ms の duration を持てる。
+            // demuxer が得た個別値を優先し、従来 codec は track の固定値を使う。
+            let currentRefSampleDuration = sample.duration != null
+                ? sample.duration
+                : refSampleDuration;
 
             if (originalDts < -0.001) {
                 continue; //pass the first sample with the invalid dts
             }
 
-            if (this._audioMeta.codec !== 'mp3' && refSampleDuration != null) {
+            if (this._audioMeta.codec !== 'mp3' && currentRefSampleDuration != null) {
                 // for AAC codec, we need to keep dts increase based on refSampleDuration
                 let curRefDts = originalDts;
                 const maxAudioFramesDrift = 3;
@@ -377,16 +382,19 @@ class MP4Remuxer {
                 }
 
                 dtsCorrection = originalDts - curRefDts;
-                if (dtsCorrection <= -maxAudioFramesDrift * refSampleDuration) {
+                if (dtsCorrection <= -maxAudioFramesDrift * currentRefSampleDuration) {
                     // If we're overlapping by more than maxAudioFramesDrift number of frame, drop this sample
                     Log.w(this.TAG, `Dropping 1 audio frame (originalDts: ${originalDts} ms ,curRefDts: ${curRefDts} ms)  due to dtsCorrection: ${dtsCorrection} ms overlap.`);
                     continue;
                 }
-                else if (dtsCorrection >= maxAudioFramesDrift * refSampleDuration && this._fillAudioTimestampGap && !Browser.safari) {
+                else if (dtsCorrection >= maxAudioFramesDrift * currentRefSampleDuration
+                        && this._fillAudioTimestampGap
+                        && this._audioMeta.codec !== 'opus'
+                        && !Browser.safari) {
                     // Silent frame generation, if large timestamp gap detected && config.fixAudioTimestampGap
                     needFillSilentFrames = true;
                     // We need to insert silent frames to fill timestamp gap
-                    let frameCount = Math.floor(dtsCorrection / refSampleDuration);
+                    let frameCount = Math.floor(dtsCorrection / currentRefSampleDuration);
                     Log.w(this.TAG, 'Large audio timestamp gap detected, may cause AV sync to drift. ' +
                         'Silent frames will be generated to avoid unsync.\n' +
                         `originalDts: ${originalDts} ms, curRefDts: ${curRefDts} ms, ` +
@@ -394,7 +402,7 @@ class MP4Remuxer {
 
 
                     dts = Math.floor(curRefDts);
-                    sampleDuration = Math.floor(curRefDts + refSampleDuration) - dts;
+                    sampleDuration = Math.floor(curRefDts + currentRefSampleDuration) - dts;
 
                     let silentUnit = AAC.getSilentFrame(this._audioMeta.originalCodec, this._audioMeta.channelCount);
                     if (silentUnit == null) {
@@ -406,9 +414,9 @@ class MP4Remuxer {
                     silentFrames = [];
 
                     for (let j = 0; j < frameCount; j++) {
-                        curRefDts = curRefDts + refSampleDuration;
+                        curRefDts = curRefDts + currentRefSampleDuration;
                         let intDts = Math.floor(curRefDts);  // change to integer
-                        let intDuration = Math.floor(curRefDts + refSampleDuration) - intDts;
+                        let intDuration = Math.floor(curRefDts + currentRefSampleDuration) - intDts;
                         let frame = {
                             dts: intDts,
                             pts: intDts,
@@ -429,13 +437,13 @@ class MP4Remuxer {
 
                     }
 
-                    this._audioNextDts = curRefDts + refSampleDuration;
+                    this._audioNextDts = curRefDts + currentRefSampleDuration;
 
                 } else {
 
                     dts = Math.floor(curRefDts);
-                    sampleDuration = Math.floor(curRefDts + refSampleDuration) - dts;
-                    this._audioNextDts = curRefDts + refSampleDuration;
+                    sampleDuration = Math.floor(curRefDts + currentRefSampleDuration) - dts;
+                    this._audioNextDts = curRefDts + currentRefSampleDuration;
 
                 }
             } else {

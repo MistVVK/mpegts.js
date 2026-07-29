@@ -35,6 +35,7 @@ export class PMT {
     // pid -> stream_type
     pid_stream_type: PIDToStreamTypeMap = {};
     pid_component_tag: {[pid: number]: number} = {};
+    av1_codec_configuration: Uint8Array | undefined;
 
     common_pids: {
         h264: number | undefined,
