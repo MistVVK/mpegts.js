@@ -19,6 +19,7 @@
 export const defaultConfig = {
     enableWorker: false,
     enableWorkerForMSE: false,
+    strictMSECleanup: false,
     enableStashBuffer: true,
     stashInitialSize: undefined,
 

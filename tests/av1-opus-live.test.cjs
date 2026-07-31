@@ -838,6 +838,72 @@ test('Safari MSE は Opus 表記を使うが init segment の codec 値を破壊
     assert.equal(initSegment.codec, 'opus');
 });
 
+test('strict MSE cleanup は一部失敗後も全工程を続けて AggregateError を返す', () => {
+    const attempts = [];
+    const makeSourceBuffer = (type) => ({
+        removeEventListener: (name) => attempts.push(`${type}:listener:${name}`)
+    });
+    const controller = new MSEController({isLive: true, strictMSECleanup: true});
+    controller._sourceBuffers.video = makeSourceBuffer('video');
+    controller._sourceBuffers.audio = makeSourceBuffer('audio');
+    controller._mediaSource = {
+        readyState: 'open',
+        removeSourceBuffer: (sourceBuffer) => {
+            const type = sourceBuffer === controller._sourceBuffers.video ? 'video' : 'audio';
+            attempts.push(`${type}:remove`);
+            if (type === 'video') throw new DOMException('video removal failed', 'InvalidStateError');
+        },
+        endOfStream: () => {
+            attempts.push('eos');
+            throw new DOMException('end of stream failed', 'InvalidStateError');
+        },
+        removeEventListener: (name) => attempts.push(`media-source:listener:${name}`)
+    };
+
+    assert.throws(
+        () => controller.shutdown(),
+        (error) => (
+            error instanceof AggregateError &&
+            error.errors.length === 2 &&
+            error.message === 'MediaSource cleanup could not be confirmed.'
+        )
+    );
+    assert.deepEqual(attempts, [
+        'video:remove',
+        'video:listener:error',
+        'video:listener:updateend',
+        'audio:remove',
+        'audio:listener:error',
+        'audio:listener:updateend',
+        'eos',
+        'media-source:listener:sourceopen',
+        'media-source:listener:sourceended',
+        'media-source:listener:sourceclose'
+    ]);
+    assert.equal(controller._sourceBuffers.video, null);
+    assert.equal(controller._sourceBuffers.audio, null);
+    assert.equal(controller._mediaSource, null);
+    assert.equal(controller._mediaElementProxy, null);
+});
+
+test('既定 MSE cleanup は互換動作として全工程を続けて失敗をlogだけに留める', () => {
+    const controller = new MSEController({isLive: true});
+    controller._sourceBuffers.video = {
+        removeEventListener: () => {}
+    };
+    controller._mediaSource = {
+        readyState: 'open',
+        removeSourceBuffer: () => {
+            throw new DOMException('video removal failed', 'InvalidStateError');
+        },
+        endOfStream: () => {},
+        removeEventListener: () => {}
+    };
+
+    assert.doesNotThrow(() => controller.shutdown());
+    assert.equal(controller._mediaSource, null);
+});
+
 test('AV1 applyPresentationSize は TS の render size のみを使い壊れた値だけ捨てる', () => {
     const base = {
         codec_mimetype: 'av01.0.08M.08',

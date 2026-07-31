@@ -53,6 +53,11 @@ declare namespace Mpegts {
          */
         enableWorkerForMSE?: boolean;
         /**
+         * @desc Continue every MediaSource cleanup step, then report an AggregateError if any step failed
+         * @defaultvalue false
+         */
+        strictMSECleanup?: boolean;
+        /**
          * @desc Enable IO stash buffer. Set to false if you need realtime (minimal latency) for live stream
          *          playback, but may stalled if there's network jittering.
          * @defaultvalue true

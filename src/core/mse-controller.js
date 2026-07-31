@@ -134,10 +134,19 @@ class MSEController {
     shutdown() {
         if (this._mediaSource) {
             let ms = this._mediaSource;
+            const cleanupErrors = [];
+            const cleanup = (action) => {
+                try {
+                    action();
+                } catch (error) {
+                    cleanupErrors.push(error);
+                    Log.e(this.TAG, error?.message ?? String(error));
+                }
+            };
             for (let type in this._sourceBuffers) {
                 // pending segments should be discard
                 let ps = this._pendingSegments[type];
-                ps.splice(0, ps.length);
+                cleanup(() => ps.splice(0, ps.length));
                 this._pendingSegments[type] = null;
                 this._pendingRemoveRanges[type] = null;
                 this._lastInitSegments[type] = null;
@@ -147,37 +156,32 @@ class MSEController {
                 if (sb) {
                     if (ms.readyState !== 'closed') {
                         // ms edge can throw an error: Unexpected call to method or property access
-                        try {
-                            ms.removeSourceBuffer(sb);
-                        } catch (error) {
-                            Log.e(this.TAG, error.message);
-                        }
-                        sb.removeEventListener('error', this.e.onSourceBufferError);
-                        sb.removeEventListener('updateend', this.e.onSourceBufferUpdateEnd);
+                        cleanup(() => ms.removeSourceBuffer(sb));
+                        cleanup(() => sb.removeEventListener('error', this.e.onSourceBufferError));
+                        cleanup(() => sb.removeEventListener('updateend', this.e.onSourceBufferUpdateEnd));
                     }
                     this._mimeTypes[type] = null;
                     this._sourceBuffers[type] = null;
                 }
             }
             if (ms.readyState === 'open') {
-                try {
-                    ms.endOfStream();
-                } catch (error) {
-                    Log.e(this.TAG, error.message);
-                }
+                cleanup(() => ms.endOfStream());
             }
             this._mediaElementProxy = null;
-            ms.removeEventListener('sourceopen', this.e.onSourceOpen);
-            ms.removeEventListener('sourceended', this.e.onSourceEnded);
-            ms.removeEventListener('sourceclose', this.e.onSourceClose);
+            cleanup(() => ms.removeEventListener('sourceopen', this.e.onSourceOpen));
+            cleanup(() => ms.removeEventListener('sourceended', this.e.onSourceEnded));
+            cleanup(() => ms.removeEventListener('sourceclose', this.e.onSourceClose));
             if (this._useManagedMediaSource) {
-                ms.removeEventListener('startstreaming', this.e.onStartStreaming);
-                ms.removeEventListener('endstreaming', this.e.onEndStreaming);
-                ms.removeEventListener('qualitychange', this.e.onQualityChange);
+                cleanup(() => ms.removeEventListener('startstreaming', this.e.onStartStreaming));
+                cleanup(() => ms.removeEventListener('endstreaming', this.e.onEndStreaming));
+                cleanup(() => ms.removeEventListener('qualitychange', this.e.onQualityChange));
             }
             this._pendingSourceBufferInit = [];
             this._isBufferFull = false;
             this._mediaSource = null;
+            if (cleanupErrors.length > 0 && this._config.strictMSECleanup === true) {
+                throw new AggregateError(cleanupErrors, 'MediaSource cleanup could not be confirmed.');
+            }
         }
     }
 
