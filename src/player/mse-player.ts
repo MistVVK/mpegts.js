@@ -86,6 +86,15 @@ class MSEPlayer {
         this._player_engine.unload();
     }
 
+    public configureLiveSync(config: {
+        liveSync: boolean;
+        liveSyncMaxLatency?: number;
+        liveSyncTargetLatency?: number;
+        liveSyncPlaybackRate?: number;
+    }): void {
+        this._player_engine.configureLiveSync(config);
+    }
+
     public play(): Promise<void> {
         return this._player_engine.play();
     }

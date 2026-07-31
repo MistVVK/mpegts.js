@@ -26,6 +26,12 @@ export default interface PlayerEngine {
     detachMediaElement(): void;
     load(): void;
     unload(): void;
+    configureLiveSync(config: {
+        liveSync: boolean;
+        liveSyncMaxLatency?: number;
+        liveSyncTargetLatency?: number;
+        liveSyncPlaybackRate?: number;
+    }): void;
     play(): Promise<void>;
     pause(): void;
     seek(seconds: number): void;

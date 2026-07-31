@@ -256,7 +256,9 @@ class PlayerEngineDedicatedThread implements PlayerEngine {
             );
         }
 
-        if (this._config.isLive && this._config.liveSync) {
+        // liveSync は再生中に切り替えられるため、ライブでは同期器を常設する。
+        // 無効時は LiveLatencySynchronizer 側が timeupdate を即時 return する。
+        if (this._config.isLive) {
             this._live_latency_synchronizer = new LiveLatencySynchronizer(
                 this._config,
                 this._media_element
@@ -291,6 +293,33 @@ class PlayerEngineDedicatedThread implements PlayerEngine {
 
         this._seeking_handler?.destroy();
         this._seeking_handler = null;
+    }
+
+    public configureLiveSync(config: {
+        liveSync: boolean;
+        liveSyncMaxLatency?: number;
+        liveSyncTargetLatency?: number;
+        liveSyncPlaybackRate?: number;
+    }): void {
+        const keys = [
+            'liveSync',
+            'liveSyncMaxLatency',
+            'liveSyncTargetLatency',
+            'liveSyncPlaybackRate'
+        ];
+        for (const key of keys) {
+            if (config[key] !== undefined) {
+                this._config[key] = config[key];
+            }
+        }
+        if (
+            this._config.liveSync === false &&
+            this._media_element &&
+            this._media_element.playbackRate !== 0 &&
+            this._media_element.playbackRate !== 1
+        ) {
+            this._media_element.playbackRate = 1;
+        }
     }
 
     public play(): Promise<void> {
