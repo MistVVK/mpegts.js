@@ -152,6 +152,15 @@ class MSStreamLoader extends BaseLoader {
             }
         }
 
+        const oneShotHeaders = this._consumeOneShotHeaders(this._config);
+        if (oneShotHeaders !== null) {
+            for (let key in oneShotHeaders) {
+                if (Object.prototype.hasOwnProperty.call(oneShotHeaders, key)) {
+                    xhr.setRequestHeader(key, oneShotHeaders[key]);
+                }
+            }
+        }
+
         if (this._isReconnecting) {
             this._isReconnecting = false;
         } else {

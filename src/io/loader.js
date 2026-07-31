@@ -81,6 +81,20 @@ export class BaseLoader {
         return this._needStash;
     }
 
+    /**
+     * Return headers for the next HTTP request and consume them synchronously.
+     * Consuming before fetch()/send() ensures redirect, retry, reconnect and seek paths
+     * cannot reuse a credential intended for the initial request only.
+     */
+    _consumeOneShotHeaders(config) {
+        if (typeof config?.oneShotHeaders !== 'object' || config.oneShotHeaders === null) {
+            return null;
+        }
+        const headers = config.oneShotHeaders;
+        config.oneShotHeaders = undefined;
+        return headers;
+    }
+
     get onContentLengthKnown() {
         return this._onContentLengthKnown;
     }

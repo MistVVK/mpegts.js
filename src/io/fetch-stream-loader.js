@@ -98,7 +98,19 @@ class FetchStreamLoader extends BaseLoader {
         // add additional headers
         if (typeof this._config.headers === 'object') {
             for (let key in this._config.headers) {
-                headers.append(key, this._config.headers[key]);
+                if (Object.prototype.hasOwnProperty.call(this._config.headers, key)) {
+                    headers.append(key, this._config.headers[key]);
+                }
+            }
+        }
+
+        // Add clone-safe headers to this request only, then consume them before fetch().
+        const oneShotHeaders = this._consumeOneShotHeaders(this._config);
+        if (oneShotHeaders !== null) {
+            for (let key in oneShotHeaders) {
+                if (Object.prototype.hasOwnProperty.call(oneShotHeaders, key)) {
+                    headers.set(key, oneShotHeaders[key]);
+                }
             }
         }
 

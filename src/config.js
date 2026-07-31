@@ -59,6 +59,9 @@ export const defaultConfig = {
     // referrerPolicy: leave as unspecified
 
     headers: undefined,
+    // Headers added to exactly one HTTP request, then removed by the selected loader.
+    // Keep this value structured-cloneable because MSE DedicatedWorker receives config via postMessage().
+    oneShotHeaders: undefined,
     customLoader: undefined
 };
 

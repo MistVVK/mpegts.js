@@ -170,6 +170,15 @@ class RangeLoader extends BaseLoader {
             }
         }
 
+        const oneShotHeaders = this._consumeOneShotHeaders(this._config);
+        if (oneShotHeaders !== null) {
+            for (let key in oneShotHeaders) {
+                if (Object.prototype.hasOwnProperty.call(oneShotHeaders, key)) {
+                    xhr.setRequestHeader(key, oneShotHeaders[key]);
+                }
+            }
+        }
+
         xhr.send();
     }
 
