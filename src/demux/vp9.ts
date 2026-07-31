@@ -58,19 +58,32 @@ function bytesEqualAt(data: Uint8Array, offset: number, expected: Uint8Array): b
  * rejected.
  */
 export function hasVP9PrivateMappingV1(descriptors: Uint8Array): boolean {
-    for (let offset = 0; offset + 2 <= descriptors.byteLength; ) {
+    // The mapping pair is a stream-identification contract, so accepting the
+    // same bytes later in the loop would silently reinterpret another private
+    // stream as VP9.
+    if (!bytesEqualAt(descriptors, 0, VP9_REGISTRATION_DESCRIPTOR)) {
+        return false;
+    }
+    const private_descriptor_offset = VP9_REGISTRATION_DESCRIPTOR.byteLength;
+    if (!bytesEqualAt(descriptors, private_descriptor_offset, VP9_PRIVATE_DESCRIPTOR)) {
+        return false;
+    }
+
+    // Additional descriptors may follow the mandatory pair, but the entire
+    // loop still has to be structurally valid.
+    for (let offset = private_descriptor_offset + VP9_PRIVATE_DESCRIPTOR.byteLength;
+        offset < descriptors.byteLength;) {
+        if (offset + 2 > descriptors.byteLength) {
+            return false;
+        }
         const descriptor_length = descriptors[offset + 1];
         const descriptor_end = offset + 2 + descriptor_length;
         if (descriptor_end > descriptors.byteLength) {
             return false;
         }
-
-        if (bytesEqualAt(descriptors, offset, VP9_REGISTRATION_DESCRIPTOR)) {
-            return bytesEqualAt(descriptors, descriptor_end, VP9_PRIVATE_DESCRIPTOR);
-        }
         offset = descriptor_end;
     }
-    return false;
+    return true;
 }
 
 /**
@@ -262,6 +275,32 @@ function readColorConfiguration(reader: VP9RawBitsReader, profile: number): VP9C
     };
 }
 
+/**
+ * TS 上の codec / render size をそのまま present に使う。
+ * 壊れた render size だけ codec size にフォールバックする（固定 SAR 補完はしない）。
+ */
+function normalizeVP9PresentationSize(
+    codec_width: number,
+    codec_height: number,
+    present_width: number,
+    present_height: number
+): {presentWidth: number; presentHeight: number} {
+    let width = present_width;
+    let height = present_height;
+    if (!Number.isFinite(width)
+            || !Number.isFinite(height)
+            || width <= 0
+            || height <= 0
+            || width > codec_width * 8
+            || height > codec_height * 8
+            || width * 8 < codec_width
+            || height * 8 < codec_height) {
+        width = codec_width;
+        height = codec_height;
+    }
+    return {presentWidth: width, presentHeight: height};
+}
+
 function readFrameConfiguration(
     reader: VP9RawBitsReader,
     profile: number,
@@ -282,14 +321,21 @@ function readFrameConfiguration(
         throw new Error('VP9 coded size exceeds level 6.2');
     }
 
+    const presentation = normalizeVP9PresentationSize(
+        codec_width,
+        codec_height,
+        present_width,
+        present_height
+    );
+
     return {
         profile,
         level,
         ... color,
         codecWidth: codec_width,
         codecHeight: codec_height,
-        presentWidth: present_width,
-        presentHeight: present_height
+        presentWidth: presentation.presentWidth,
+        presentHeight: presentation.presentHeight
     };
 }
 
@@ -498,7 +544,22 @@ export function buildVP9VideoDetails(config: VP9CodecConfiguration): any {
         ref_frames: 3,
         chroma_format,
         chroma_format_string,
-        sar_ratio: {width: 1, height: 1},
+        sar_ratio: (() => {
+            let sar_width = config.presentWidth * config.codecHeight;
+            let sar_height = config.presentHeight * config.codecWidth;
+            let a = Math.abs(Math.floor(sar_width));
+            let b = Math.abs(Math.floor(sar_height));
+            while (b !== 0) {
+                const t = b;
+                b = a % b;
+                a = t;
+            }
+            const divisor = a > 0 ? a : 1;
+            return {
+                width: Math.floor(sar_width / divisor) || 1,
+                height: Math.floor(sar_height / divisor) || 1,
+            };
+        })(),
         codec_size: {width: config.codecWidth, height: config.codecHeight},
         present_size: {width: config.presentWidth, height: config.presentHeight},
         frame_rate: {fixed: false, fps: 0, fps_num: 0, fps_den: 1},

@@ -837,3 +837,32 @@ test('Safari MSE は Opus 表記を使うが init segment の codec 値を破壊
     assert.equal(createdMimeType, 'audio/mp4;codecs=Opus');
     assert.equal(initSegment.codec, 'opus');
 });
+
+test('AV1 applyPresentationSize は TS の render size のみを使い壊れた値だけ捨てる', () => {
+    const base = {
+        codec_mimetype: 'av01.0.08M.08',
+        sequence_header_data: new Uint8Array([0x0A, 0x00]),
+    };
+    const garbage = {...base};
+    AV1OBUParser.applyPresentationSize(garbage, 1440, 1080, 38465, 41);
+    assert.deepEqual(garbage.codec_size, {width: 1440, height: 1080});
+    // 壊れた render は codec size にフォールバック（固定 16:9 補完はしない）
+    assert.deepEqual(garbage.present_size, {width: 1440, height: 1080});
+    assert.deepEqual(garbage.sar_ratio, {width: 1, height: 1});
+
+    const square = {...base};
+    AV1OBUParser.applyPresentationSize(square, 1440, 1080, 1440, 1080);
+    assert.deepEqual(square.present_size, {width: 1440, height: 1080});
+    assert.deepEqual(square.sar_ratio, {width: 1, height: 1});
+
+    // TS に render 1920x1080 があればそのまま SAR 4:3
+    const fromTs = {...base};
+    AV1OBUParser.applyPresentationSize(fromTs, 1440, 1080, 1920, 1080);
+    assert.deepEqual(fromTs.present_size, {width: 1920, height: 1080});
+    assert.deepEqual(fromTs.sar_ratio, {width: 4, height: 3});
+
+    const hd = {...base};
+    AV1OBUParser.applyPresentationSize(hd, 1280, 720, 1280, 720);
+    assert.deepEqual(hd.present_size, {width: 1280, height: 720});
+    assert.deepEqual(hd.sar_ratio, {width: 1, height: 1});
+});

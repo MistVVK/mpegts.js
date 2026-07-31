@@ -684,33 +684,94 @@ class AV1OBUParser {
         if (!(frame_type === SWITCH_FRAME || (frame_type == KEY_FRAME && show_frame))) {
             refresh_frame_flags = gb.readBits(8);
         }
-        if (keyframe || refresh_frame_flags !== allFrames) {
-            if (error_resilient_mode && sequence_header.enable_order_hint) {
-                for (let i = 0; i < NUM_REF_FRAMES; i++) {
-                    gb.readBits(sequence_header.order_hint_bits);
-                }
+        // AV1 spec 5.9.2: ref_order_hint[] is only present for inter frames.
+        // KEY / INTRA_ONLY で読むと frame size 以降がずれ、render size が壊れ
+        // Chrome MSE が natural size 異常で APPEND_FAILED になる。
+        if (!keyframe
+                && error_resilient_mode
+                && sequence_header.enable_order_hint
+                && sequence_header.order_hint_bits > 0) {
+            for (let i = 0; i < NUM_REF_FRAMES; i++) {
+                gb.readBits(sequence_header.order_hint_bits);
             }
         }
         if (keyframe){
             const resolution = AV1OBUParser.frameSizeAndRenderSize(gb, frame_size_override_flag, sequence_header);
-            result.codec_size = {
-                width: resolution.FrameWidth,
-                height: resolution.FrameHeight,
-            }
-            result.present_size = {
-                width: resolution.RenderWidth,
-                height: resolution.RenderHeight,
-            }
-            result.sar_ratio = {
-                width: resolution.RenderWidth / resolution.FrameWidth,
-                height: resolution.RenderHeight / resolution.FrameHeight,
-            }
+            AV1OBUParser.applyPresentationSize(
+                result,
+                resolution.FrameWidth,
+                resolution.FrameHeight,
+                resolution.RenderWidth,
+                resolution.RenderHeight
+            );
         }
         // fmp4 can't support reference frame resolution change, so ignored
 
         gb.destroy();
         gb = null;
         return result;
+    }
+
+    /**
+     * TS 上の codec / render size から present_size と整数 SAR を確定する。
+     * SAR はビットストリームの値のみを使い、解像度に応じた固定補完はしない。
+     * 壊れた render size だけ codec size にフォールバックする。
+     */
+    static applyPresentationSize(
+        result: AV1Metadata,
+        frame_width: number,
+        frame_height: number,
+        render_width: number,
+        render_height: number
+    ): void {
+        let present_width = render_width;
+        let present_height = render_height;
+        if (!Number.isFinite(present_width)
+                || !Number.isFinite(present_height)
+                || present_width <= 0
+                || present_height <= 0
+                || present_width > frame_width * 8
+                || present_height > frame_height * 8
+                || present_width * 8 < frame_width
+                || present_height * 8 < frame_height) {
+            present_width = frame_width;
+            present_height = frame_height;
+        }
+
+        result.codec_size = {
+            width: frame_width,
+            height: frame_height,
+        };
+        result.present_size = {
+            width: present_width,
+            height: present_height,
+        };
+
+        let sar_width = present_width * frame_height;
+        let sar_height = present_height * frame_width;
+        const divisor = AV1OBUParser.gcd(sar_width, sar_height);
+        if (divisor > 0) {
+            sar_width = Math.floor(sar_width / divisor);
+            sar_height = Math.floor(sar_height / divisor);
+        } else {
+            sar_width = 1;
+            sar_height = 1;
+        }
+        result.sar_ratio = {
+            width: sar_width,
+            height: sar_height,
+        };
+    }
+
+    static gcd(a: number, b: number): number {
+        let x = Math.abs(Math.floor(a));
+        let y = Math.abs(Math.floor(b));
+        while (y !== 0) {
+            const t = y;
+            y = x % y;
+            x = t;
+        }
+        return x;
     }
 
     static frameSizeAndRenderSize(gb: AV1BitReader, frame_size_override_flag: boolean, sequence_header: SequenceHeaderDetails): FrameResolutions {

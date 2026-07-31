@@ -315,7 +315,20 @@ test('VP9 private mapping v1 は完全一致する隣接 descriptor pair だけ�
         new Uint8Array([0x52, 0x01, 0x80]),
         VP9_PRIVATE_MAPPING_V1_DESCRIPTORS
     ]);
-    assert.equal(hasVP9PrivateMappingV1(withPrefix), true);
+    assert.equal(hasVP9PrivateMappingV1(withPrefix), false);
+
+    const withSuffix = concatenate([
+        VP9_PRIVATE_MAPPING_V1_DESCRIPTORS,
+        new Uint8Array([0x52, 0x01, 0x80])
+    ]);
+    assert.equal(hasVP9PrivateMappingV1(withSuffix), true);
+    assert.equal(
+        hasVP9PrivateMappingV1(concatenate([
+            VP9_PRIVATE_MAPPING_V1_DESCRIPTORS,
+            new Uint8Array([0x52, 0x02, 0x80])
+        ])),
+        false
+    );
 
     for (const index of [13, 14, 15]) {
         const invalid = VP9_PRIVATE_MAPPING_V1_DESCRIPTORS.slice();
