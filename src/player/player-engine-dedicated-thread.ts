@@ -16,8 +16,8 @@
  * limitations under the License.
  */
 
-import * as EventEmitter from 'events';
-import * as work from '../utils/webworkify-webpack';
+import {EventEmitter} from 'events';
+import * as workModule from '../utils/webworkify-webpack';
 import type PlayerEngine from './player-engine';
 import Log from '../utils/logger';
 import LoggingControl from '../utils/logging-control.js';
@@ -53,6 +53,11 @@ import {
     WorkerMessagePacketTransmuxingEventInfo,
     WorkerMessagePacketTransmuxingEventRecommendSeekpoint,
 } from './player-engine-worker-msg-def.js';
+
+const work = ((workModule as any).default ?? workModule) as (
+    moduleId: any,
+    options: {all: boolean},
+) => Worker;
 
 class PlayerEngineDedicatedThread implements PlayerEngine {
 
@@ -120,19 +125,34 @@ class PlayerEngineDedicatedThread implements PlayerEngine {
 
         LoggingControl.registerListener(this.e.onLoggingConfigChanged);
 
-        this._worker = work(require.resolve('./player-engine-worker'), {all: true}) as Worker;
-        this._worker.addEventListener('message', this._onWorkerMessage.bind(this));
+        try {
+            this._worker = work(require.resolve('./player-engine-worker'), {all: true}) as Worker;
+            this._worker.addEventListener('message', this._onWorkerMessage.bind(this));
 
-        this._worker.postMessage({
-            cmd: 'init',
-            media_data_source: this._media_data_source,
-            config: this._config
-        } as WorkerCommandPacketInit);
+            this._worker.postMessage({
+                cmd: 'init',
+                media_data_source: this._media_data_source,
+                config: this._config
+            } as WorkerCommandPacketInit);
 
-        this._worker.postMessage({
-            cmd: 'logging_config',
-            logging_config: LoggingControl.getConfig()
-        } as WorkerCommandPacketLoggingConfig);
+            this._worker.postMessage({
+                cmd: 'logging_config',
+                logging_config: LoggingControl.getConfig()
+            } as WorkerCommandPacketLoggingConfig);
+        } catch (error) {
+            // postMessage() の structured-clone failure を含む constructor 途中例外でも、
+            // MSEPlayer の main-thread fallback 前に worker と logging listener を回収する。
+            const workerObjectURL = (this._worker as any)?.objectURL;
+            this._worker?.terminate();
+            if (workerObjectURL && self.URL?.revokeObjectURL) {
+                self.URL.revokeObjectURL(workerObjectURL);
+            }
+            LoggingControl.removeListener(this.e.onLoggingConfigChanged);
+            this.e = null;
+            this._media_data_source = null;
+            this._emitter.removeAllListeners();
+            throw error;
+        }
     }
 
     public destroy(): void {
@@ -435,7 +455,11 @@ class PlayerEngineDedicatedThread implements PlayerEngine {
 
         if (msg == 'destroyed' || this._worker_destroying) {
             this._worker_destroying = false;
+            const workerObjectURL = (this._worker as any)?.objectURL;
             this._worker?.terminate();
+            if (workerObjectURL && self.URL?.revokeObjectURL) {
+                self.URL.revokeObjectURL(workerObjectURL);
+            }
             this._worker = null;
             return;
         }
