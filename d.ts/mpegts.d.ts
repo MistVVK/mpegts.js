@@ -237,6 +237,12 @@ declare namespace Mpegts {
             [k: string]: string
         }
         /**
+         * @desc Indicates additional headers that will be added to exactly the first HTTP request
+         */
+        oneShotHeaders?: {
+            [k: string]: string
+        }
+        /**
          * @desc Should implement `BaseLoader` interface
          */
         customLoader?: CustomLoaderConstructor;
@@ -355,6 +361,13 @@ declare namespace Mpegts {
         statisticsInfo: NativePlayerStatisticsInfo | MSEPlayerStatisticsInfo;
     }
 
+    interface LiveSyncConfig {
+        liveSync: boolean;
+        liveSyncMaxLatency?: number;
+        liveSyncTargetLatency?: number;
+        liveSyncPlaybackRate?: number;
+    }
+
     interface NativePlayerStatisticsInfo {
         playerType: 'NativePlayer';
         url: string;
@@ -392,6 +405,7 @@ declare namespace Mpegts {
         videoDataRate?: number;
         hasAudio?: boolean;
         hasVideo?: boolean;
+        audioTrackCount?: number;
         chromaFormat?: string;
         fps?: number;
 
@@ -399,6 +413,7 @@ declare namespace Mpegts {
     }
 
     interface MSEPlayer extends Player {
+        configureLiveSync(config: LiveSyncConfig): void;
         switchPrimaryAudio(): void;
         switchSecondaryAudio(): void;
         mediaInfo: MSEPlayerMediaInfo;

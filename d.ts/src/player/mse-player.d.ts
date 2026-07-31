@@ -12,10 +12,17 @@ declare class MSEPlayer {
     detachMediaElement(): void;
     load(): void;
     unload(): void;
+    configureLiveSync(config: {
+        liveSync: boolean;
+        liveSyncMaxLatency?: number;
+        liveSyncTargetLatency?: number;
+        liveSyncPlaybackRate?: number;
+    }): void;
     play(): Promise<void>;
     pause(): void;
     switchPrimaryAudio(): void;
     switchSecondaryAudio(): void;
+    switchAudioTrack(index: number): void;
     get type(): string;
     get buffered(): TimeRanges;
     get duration(): number;

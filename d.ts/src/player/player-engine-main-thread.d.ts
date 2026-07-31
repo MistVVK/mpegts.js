@@ -28,11 +28,18 @@ declare class PlayerEngineMainThread implements PlayerEngine {
     detachMediaElement(): void;
     load(): void;
     unload(): void;
+    configureLiveSync(config: {
+        liveSync: boolean;
+        liveSyncMaxLatency?: number;
+        liveSyncTargetLatency?: number;
+        liveSyncPlaybackRate?: number;
+    }): void;
     play(): Promise<void>;
     pause(): void;
     seek(seconds: number): void;
     switchPrimaryAudio(): void;
     switchSecondaryAudio(): void;
+    switchAudioTrack(index: number): void;
     get mediaInfo(): MediaInfo;
     get statisticsInfo(): any;
     private _onMSESourceOpen;

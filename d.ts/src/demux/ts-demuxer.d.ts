@@ -21,7 +21,10 @@ declare class TSDemuxer extends BaseDemuxer {
     private last_pcr_base_;
     private timestamp_offset_;
     private audio_last_sample_pts_;
+    private opus_next_sample_pts_;
     private aac_last_incomplete_data_;
+    private selected_audio_pid_;
+    private selected_audio_kind_;
     private has_video_;
     private has_audio_;
     private video_init_segment_dispatched_;
@@ -30,7 +33,7 @@ declare class TSDemuxer extends BaseDemuxer {
     private loas_previous_frame;
     private video_track_;
     private audio_track_;
-    preferred_secondary_audio: boolean;
+    preferred_audio_track_index: number;
     constructor(probe_data: any, config: any);
     destroy(): void;
     static probe(buffer: ArrayBuffer): {
@@ -65,7 +68,12 @@ declare class TSDemuxer extends BaseDemuxer {
     private parsePAT;
     private parsePMT;
     private parseSCTE35;
+    private parseVP9Payload;
+    private isVP9ConfigurationChanged;
     private parseAV1Payload;
+    private isAV1DescriptorCompatible;
+    private isAV1ConfigurationChanged;
+    private bytesEqual;
     private parseH264Payload;
     private parseH265Payload;
     private detectVideoMetadataChange;

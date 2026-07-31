@@ -2,6 +2,7 @@ export declare class PESPrivateData {
     pid: number;
     stream_id: number;
     pts?: number;
+    original_pts?: number;
     dts?: number;
     nearest_pts?: number;
     data: Uint8Array;

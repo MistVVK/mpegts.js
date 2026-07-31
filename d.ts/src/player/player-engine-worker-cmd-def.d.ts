@@ -25,5 +25,5 @@ export type WorkerCommandPacketReadyStateChange = WorkerCommandPacket & {
 };
 export type WorkerCommandPacketSwitchAudio = WorkerCommandPacket & {
     cmd: 'switch_audio';
-    audio_track: 'primary' | 'secondary';
+    audio_track: number;
 };

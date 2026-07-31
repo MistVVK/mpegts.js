@@ -28,10 +28,15 @@ export declare class PMT {
     version_number: number;
     pcr_pid: number;
     pid_stream_type: PIDToStreamTypeMap;
+    pid_component_tag: {
+        [pid: number]: number;
+    };
+    av1_codec_configuration: Uint8Array | undefined;
     common_pids: {
         h264: number | undefined;
         h265: number | undefined;
         av1: number | undefined;
+        vp9: number | undefined;
         adts_aac: number | undefined;
         loas_aac: number | undefined;
         opus: number | undefined;
