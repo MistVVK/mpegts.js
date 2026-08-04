@@ -389,8 +389,7 @@ class MP4Remuxer {
                 }
                 else if (dtsCorrection >= maxAudioFramesDrift * currentRefSampleDuration
                         && this._fillAudioTimestampGap
-                        && this._audioMeta.codec !== 'opus'
-                        && !Browser.safari) {
+                        && this._audioMeta.codec !== 'opus') {
                     // Silent frame generation, if large timestamp gap detected && config.fixAudioTimestampGap
                     needFillSilentFrames = true;
                     // We need to insert silent frames to fill timestamp gap
