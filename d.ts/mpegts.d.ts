@@ -76,6 +76,13 @@ declare namespace Mpegts {
         isLive?: boolean;
 
         /**
+         * @desc Emit a finite duration in live fMP4 initialization segments so Chromium treats the MSE
+         *       stream as recorded instead of enabling its low-delay video renderer.
+         * @defaultvalue false
+         */
+        forceMSEStreamLivenessRecorded?: boolean;
+
+        /**
          * @desc Chasing the live stream latency caused by the internal buffer in HTMLMediaElement
          *       `isLive` should also be set to `true`
          * @defaultvalue false

@@ -24,6 +24,11 @@ import { SampleInfo, MediaSegmentInfo, MediaSegmentInfoList } from '../core/medi
 import { IllegalStateException } from '../utils/exception.js';
 
 
+// Version 0 MP4 durations use 32 bits, while all bits set means an unknown duration.
+// Use the largest finite value so Chromium classifies live MSE tracks as recorded.
+const RECORDED_MSE_DURATION = 0xFFFFFFFE;
+
+
 // Fragmented mp4 remuxer
 class MP4Remuxer {
 
@@ -32,6 +37,7 @@ class MP4Remuxer {
 
         this._config = config;
         this._isLive = (config.isLive === true) ? true : false;
+        this._forceMSEStreamLivenessRecorded = config.forceMSEStreamLivenessRecorded === true;
 
         this._dtsBase = -1;
         this._dtsBaseInited = false;
@@ -146,6 +152,11 @@ class MP4Remuxer {
 
     _onTrackMetadataReceived(type, metadata) {
         let metabox = null;
+        // Chromium selects its low-delay video renderer when an fMP4 init segment has no finite duration.
+        // Keep mpegts.js live-stream behavior while making only the initialization metadata finite.
+        const initSegmentMetadata = this._isLive && this._forceMSEStreamLivenessRecorded
+            ? Object.assign({}, metadata, {duration: RECORDED_MSE_DURATION})
+            : metadata;
 
         let container = 'mp4';
         let codec = metadata.codec;
@@ -159,11 +170,11 @@ class MP4Remuxer {
                 metabox = new Uint8Array();
             } else {
                 // 'audio/mp4, codecs="codec"'
-                metabox = MP4.generateInitSegment(metadata);
+                metabox = MP4.generateInitSegment(initSegmentMetadata);
             }
         } else if (type === 'video') {
             this._videoMeta = metadata;
-            metabox = MP4.generateInitSegment(metadata);
+            metabox = MP4.generateInitSegment(initSegmentMetadata);
         } else {
             return;
         }

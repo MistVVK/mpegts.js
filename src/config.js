@@ -24,6 +24,7 @@ export const defaultConfig = {
     stashInitialSize: undefined,
 
     isLive: false,
+    forceMSEStreamLivenessRecorded: false,
 
     liveBufferLatencyChasing: false,
     liveBufferLatencyChasingOnPaused: false,
