@@ -373,6 +373,12 @@ export class AudioSpecificConfig {
                 audio_object_type = 2;
                 config = new Array(2);
                 extension_sampling_index = sampling_index;
+            } else if (original_audio_object_type === 2 && sampling_index === 3) {
+                // 48kHz AAC-LC must stay LC-AAC. Declaring HE-AAC makes Chromium
+                // decode the LC frames as SBR and desynchronize the audio timeline.
+                audio_object_type = 2;
+                config = new Array(2);
+                extension_sampling_index = sampling_index;
             }
         }
 
