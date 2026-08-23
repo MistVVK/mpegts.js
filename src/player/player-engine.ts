@@ -38,6 +38,7 @@ export default interface PlayerEngine {
     switchPrimaryAudio(): void;
     switchSecondaryAudio(): void;
     switchAudioTrack(index: number): void;
+    setVideoColorRewrite(mode: string): void;
     readonly mediaInfo: MediaInfo | undefined;
     readonly statisticsInfo: any | undefined;
 }

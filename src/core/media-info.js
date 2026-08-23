@@ -43,6 +43,12 @@ class MediaInfo {
         this.chromaFormat = null;
         this.sarNum = null;
         this.sarDen = null;
+        this.colourPrimaries = null;
+        this.transferCharacteristics = null;
+        this.matrixCoefficients = null;
+        this.effectiveColourPrimaries = null;
+        this.effectiveTransferCharacteristics = null;
+        this.effectiveMatrixCoefficients = null;
 
         this.metadata = null;
         this.segments = null;  // MediaInfo[]

@@ -36,6 +36,10 @@ class ExpGolomb {
         this._buffer = null;
     }
 
+    getBitsConsumed() {
+        return this._buffer_index * 8 - this._current_word_bits_left;
+    }
+
     _fillCurrentWord() {
         let buffer_bytes_left = this._total_bytes - this._buffer_index;
         if (buffer_bytes_left <= 0)

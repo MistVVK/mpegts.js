@@ -40,6 +40,7 @@ declare class PlayerEngineMainThread implements PlayerEngine {
     switchPrimaryAudio(): void;
     switchSecondaryAudio(): void;
     switchAudioTrack(index: number): void;
+    setVideoColorRewrite(mode: string): void;
     get mediaInfo(): MediaInfo;
     get statisticsInfo(): any;
     private _onMSESourceOpen;

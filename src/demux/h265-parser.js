@@ -17,6 +17,11 @@
  */
 
 import ExpGolomb from './exp-golomb.js';
+import {
+    applyColorRewriteToBytes,
+    normalizeVideoColorRewriteMode,
+    rbspToEbsp,
+} from './video-color-rewrite.ts';
 
 class H265NaluParser {
 
@@ -224,6 +229,7 @@ class H265NaluParser {
         let colour_primaries = 2;
         let transfer_characteristics = 2;
         let matrix_coeffs = 2;
+        let color_bit_offset;
         if (vui_parameters_present_flag) {
             let aspect_ratio_info_present_flag = gb.readBool();
             if (aspect_ratio_info_present_flag) {
@@ -250,6 +256,7 @@ class H265NaluParser {
                 gb.readBool();
                 let colour_description_present_flag = gb.readBool();
                 if (colour_description_present_flag) {
+                    color_bit_offset = gb.getBitsConsumed();
                     colour_primaries = gb.readByte();
                     transfer_characteristics = gb.readByte();
                     matrix_coeffs = gb.readByte();
@@ -405,6 +412,7 @@ class H265NaluParser {
             colour_primaries,
             transfer_characteristics,
             matrix_coeffs,
+            color_bit_offset,
 
             frame_rate: {
                 fixed: fps_fixed,
@@ -502,6 +510,29 @@ class H265NaluParser {
 
     static getLevelString(level_idc) {
         return (level_idc / 30).toFixed(1);
+    }
+
+    static rewriteSPSColor(nalu_ebsp, mode) {
+        const details = H265NaluParser.parseSPS(nalu_ebsp);
+        const original = {
+            colour_primaries: details.colour_primaries,
+            transfer_characteristics: details.transfer_characteristics,
+            matrix_coeffs: details.matrix_coeffs,
+        };
+        const rbsp = H265NaluParser._ebsp2rbsp(nalu_ebsp);
+        const rewritten = applyColorRewriteToBytes(
+            rbsp,
+            details.color_bit_offset,
+            original,
+            normalizeVideoColorRewriteMode(mode),
+        );
+        return {
+            nalu: rewritten.rewritten === true ? rbspToEbsp(rewritten.data) : nalu_ebsp,
+            original: rewritten.original,
+            effective: rewritten.effective,
+            rewritten: rewritten.rewritten,
+            details,
+        };
     }
 }
 

@@ -162,6 +162,17 @@ class Transmuxer {
         }
     }
 
+    setVideoColorRewrite(mode) {
+        if (this._worker) {
+            this._worker.postMessage({cmd: 'video_color_rewrite', param: mode});
+        } else if (this._controller._demuxer instanceof TSDemuxer) {
+            this._controller._demuxer.setVideoColorRewrite(mode);
+        }
+        if (this._config) {
+            this._config.videoColorRewrite = mode;
+        }
+    }
+
     _onInitSegment(type, initSegment) {
         // do async invoke
         Promise.resolve().then(() => {

@@ -23,6 +23,7 @@ declare class MSEPlayer {
     switchPrimaryAudio(): void;
     switchSecondaryAudio(): void;
     switchAudioTrack(index: number): void;
+    setVideoColorRewrite(mode: string): void;
     get type(): string;
     get buffered(): TimeRanges;
     get duration(): number;

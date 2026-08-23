@@ -39,6 +39,7 @@ import {
     WorkerCommandPacketReadyStateChange,
     WorkerCommandPacketUnbufferedSeek,
     WorkerCommandPacketSwitchAudio,
+    WorkerCommandPacketVideoColorRewrite,
 } from './player-engine-worker-cmd-def.js';
 import {
     WorkerMessagePacket,
@@ -371,6 +372,16 @@ class PlayerEngineDedicatedThread implements PlayerEngine {
             cmd: 'switch_audio',
             audio_track: index,
         } as WorkerCommandPacketSwitchAudio);
+    }
+
+    public setVideoColorRewrite(mode: string): void {
+        if (this._config) {
+            this._config.videoColorRewrite = mode;
+        }
+        this._worker?.postMessage({
+            cmd: 'video_color_rewrite',
+            mode,
+        } as WorkerCommandPacketVideoColorRewrite);
     }
 
     public get mediaInfo(): MediaInfo {

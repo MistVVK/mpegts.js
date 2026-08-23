@@ -107,6 +107,11 @@ let TransmuxingWorker = function (self) {
                     controller._demuxer.preferred_audio_track_index = e.data.param;
                 }
                 break;
+            case 'video_color_rewrite':
+                if (controller._demuxer instanceof TSDemuxer) {
+                    controller._demuxer.setVideoColorRewrite(e.data.param);
+                }
+                break;
         }
     });
 

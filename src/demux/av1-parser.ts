@@ -21,6 +21,13 @@
  * 既存の ExpGolomb は H.26x 向けの互換挙動として末尾の部分 word を返すため、
  * AV1 専用の境界検査付き bit reader を使用する。
  */
+import {
+    applyColorRewriteToBytes,
+    normalizeVideoColorRewriteMode,
+    type VideoColorRewriteMode,
+    type VideoColorTuple,
+} from './video-color-rewrite';
+
 class AV1BitReader {
 
     private readonly data_: Uint8Array;
@@ -49,6 +56,10 @@ class AV1BitReader {
 
     public readBool(): boolean {
         return this.readBits(1) === 1;
+    }
+
+    public getBitOffset(): number {
+        return this.bit_offset_;
     }
 
     public readUEG(): number {
@@ -123,6 +134,10 @@ export type AV1Metadata = {
 
     sequence_header: SequenceHeaderDetails;
     sequence_header_data: Uint8Array;
+    colour_primaries?: number;
+    transfer_characteristics?: number;
+    matrix_coeffs?: number;
+    color_bit_offset?: number;
     keyframe?: boolean;
 
     frame_rate: {
@@ -463,7 +478,9 @@ class AV1OBUParser {
         let color_primaries = CP_UNSPECIFIED;
         let transfer_characteristics = TC_UNSPECIFIED;
         let matrix_coefficients = MC_UNSPECIFIED;
+        let color_bit_offset: number | undefined;
         if (color_description_present_flag) {
+            color_bit_offset = gb.getBitOffset();
             color_primaries = gb.readBits(8);
             transfer_characteristics = gb.readBits(8);
             matrix_coefficients = gb.readBits(8);
@@ -530,6 +547,10 @@ class AV1OBUParser {
             subsampling_x,
             subsampling_y,
             chroma_sample_position,
+            colour_primaries: color_primaries,
+            transfer_characteristics,
+            matrix_coeffs: matrix_coefficients,
+            color_bit_offset,
             ref_sample_duration: fps > 0 ? 1000 / fps : 1000 / 60,
 
             sequence_header: {
@@ -841,6 +862,75 @@ class AV1OBUParser {
         } else {
             return 'Unknown';
         }
+    }
+
+    static rewriteSequenceHeaderOBU(
+        obu: Uint8Array,
+        mode: VideoColorRewriteMode | unknown,
+    ): {
+        obu: Uint8Array;
+        original: VideoColorTuple;
+        effective: VideoColorTuple;
+        rewritten: boolean;
+    } | null {
+        if (obu.byteLength === 0) {
+            return null;
+        }
+        const header = obu[0];
+        if ((header & 0x81) !== 0) {
+            return null;
+        }
+        const type = (header & 0x78) >>> 3;
+        if (type !== 1) {
+            return null;
+        }
+        let offset = 1;
+        if ((header & 0x04) !== 0) {
+            offset += 1;
+        }
+        if ((header & 0x02) !== 0) {
+            for (let byte_count = 0; byte_count < 8; byte_count++) {
+                if (offset >= obu.byteLength) {
+                    return null;
+                }
+                const value = obu[offset++];
+                if ((value & 0x80) === 0) {
+                    break;
+                }
+            }
+        }
+        const payload = obu.subarray(offset);
+        if (payload.byteLength === 0) {
+            return null;
+        }
+        const details = AV1OBUParser.parseSeuqneceHeader(payload);
+        const original: VideoColorTuple = {
+            colour_primaries: details.colour_primaries ?? 2,
+            transfer_characteristics: details.transfer_characteristics ?? 2,
+            matrix_coeffs: details.matrix_coeffs ?? 2,
+        };
+        const rewritten = applyColorRewriteToBytes(
+            payload,
+            details.color_bit_offset,
+            original,
+            normalizeVideoColorRewriteMode(mode),
+        );
+        if (rewritten.rewritten === false) {
+            return {
+                obu,
+                original: rewritten.original,
+                effective: rewritten.effective,
+                rewritten: false,
+            };
+        }
+        const output = obu.slice();
+        output.set(rewritten.data, offset);
+        return {
+            obu: output,
+            original: rewritten.original,
+            effective: rewritten.effective,
+            rewritten: true,
+        };
     }
 }
 

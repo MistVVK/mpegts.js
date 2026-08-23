@@ -258,6 +258,13 @@ declare namespace Mpegts {
          * @desc Should implement `BaseLoader` interface
          */
         customLoader?: CustomLoaderConstructor;
+        /**
+         * @desc Rewrite HEVC VUI / AV1 sequence-header CICP before remuxing.
+         *       ToneMap: HLG/PQ -> sRGB transfer + BT.709 primaries.
+         *       SdrInHlg: HLG transfer 18 -> 1 only.
+         * @defaultvalue 'None'
+         */
+        videoColorRewrite?: 'None' | 'ToneMap' | 'SdrInHlg';
     }
 
     interface CustomSeekHandlerConstructor {
@@ -428,6 +435,7 @@ declare namespace Mpegts {
         configureLiveSync(config: LiveSyncConfig): void;
         switchPrimaryAudio(): void;
         switchSecondaryAudio(): void;
+        setVideoColorRewrite(mode: 'None' | 'ToneMap' | 'SdrInHlg'): void;
         mediaInfo: MSEPlayerMediaInfo;
         statisticsInfo: MSEPlayerStatisticsInfo;
     }

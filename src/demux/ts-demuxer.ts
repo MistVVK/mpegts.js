@@ -38,6 +38,11 @@ import { KLVData, klv_parse } from './klv';
 import AV1OBUInMpegTsParser, { parseAV1MPEG2TSDescriptors } from './av1';
 import AV1OBUParser, { AV1Metadata } from './av1-parser';
 import {
+    normalizeVideoColorRewriteMode,
+    type VideoColorRewriteMode,
+    type VideoColorTuple,
+} from './video-color-rewrite';
+import {
     OpusMPEG2TSMetadata,
     parseOpusMPEG2TSAccessUnits,
     parseOpusMPEG2TSDescriptors
@@ -177,6 +182,27 @@ class TSDemuxer extends BaseDemuxer {
         this.ts_packet_size_ = probe_data.ts_packet_size;
         this.sync_offset_ = probe_data.sync_offset;
         this.config_ = config;
+    }
+
+    public setVideoColorRewrite(mode: VideoColorRewriteMode | unknown): void {
+        this.config_.videoColorRewrite = normalizeVideoColorRewriteMode(mode);
+    }
+
+    private getVideoColorRewriteMode(): VideoColorRewriteMode {
+        return normalizeVideoColorRewriteMode(this.config_?.videoColorRewrite);
+    }
+
+    private applyVideoColorToMediaInfo(
+        original: VideoColorTuple | undefined,
+        effective: VideoColorTuple | undefined,
+    ): void {
+        const mi = this.media_info_ as any;
+        mi.colourPrimaries = original?.colour_primaries ?? null;
+        mi.transferCharacteristics = original?.transfer_characteristics ?? null;
+        mi.matrixCoefficients = original?.matrix_coeffs ?? null;
+        mi.effectiveColourPrimaries = effective?.colour_primaries ?? null;
+        mi.effectiveTransferCharacteristics = effective?.transfer_characteristics ?? null;
+        mi.effectiveMatrixCoefficients = effective?.matrix_coeffs ?? null;
     }
 
     public destroy() {
@@ -1149,6 +1175,14 @@ class TSDemuxer extends BaseDemuxer {
         let keyframe = false;
 
         while ((payload = av1_in_ts_parser.readNextOBUPayload()) != null) {
+            const rewrite = AV1OBUParser.rewriteSequenceHeaderOBU(
+                payload,
+                this.getVideoColorRewriteMode(),
+            );
+            if (rewrite != null) {
+                payload = rewrite.obu;
+                this.applyVideoColorToMediaInfo(rewrite.original, rewrite.effective);
+            }
             const result = AV1OBUParser.parseOBUsWithStatus(payload, details);
             if (!result.valid) {
                 Log.e(this.TAG, `Malformed or unsupported AV1 OBU payload`);
@@ -1371,6 +1405,15 @@ class TSDemuxer extends BaseDemuxer {
                     };
                 }
             } else if (nalu_hvc1.type === H265NaluType.kSliceSPS) {
+                const rewrite = H265Parser.rewriteSPSColor(
+                    nalu_payload.data,
+                    this.getVideoColorRewriteMode(),
+                );
+                if (rewrite.rewritten === true) {
+                    nalu_payload.data = rewrite.nalu;
+                    nalu_hvc1 = new H265NaluHVC1(nalu_payload);
+                }
+                this.applyVideoColorToMediaInfo(rewrite.original, rewrite.effective);
                 let details = H265Parser.parseSPS(nalu_payload.data);
                 if (!this.video_init_segment_dispatched_) {
                     this.video_metadata_.sps = nalu_hvc1;
@@ -1452,6 +1495,19 @@ class TSDemuxer extends BaseDemuxer {
         if (new_details.present_size.width !== this.video_metadata_.details.present_size.width) {
             Log.v(this.TAG, `Video: Present resolution width changed from ` +
                             `${this.video_metadata_.details.present_size.width} to ${new_details.present_size.width}`);
+            return true;
+        }
+
+        if (new_details.colour_primaries !== this.video_metadata_.details.colour_primaries
+            || new_details.transfer_characteristics !== this.video_metadata_.details.transfer_characteristics
+            || new_details.matrix_coeffs !== this.video_metadata_.details.matrix_coeffs) {
+            Log.v(this.TAG, `Video: Colour signalling changed from ` +
+                            `${this.video_metadata_.details.colour_primaries}/` +
+                            `${this.video_metadata_.details.transfer_characteristics}/` +
+                            `${this.video_metadata_.details.matrix_coeffs} to ` +
+                            `${new_details.colour_primaries}/` +
+                            `${new_details.transfer_characteristics}/` +
+                            `${new_details.matrix_coeffs}`);
             return true;
         }
 

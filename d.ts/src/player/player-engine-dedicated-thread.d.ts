@@ -39,6 +39,7 @@ declare class PlayerEngineDedicatedThread implements PlayerEngine {
     switchPrimaryAudio(): void;
     switchSecondaryAudio(): void;
     switchAudioTrack(index: number): void;
+    setVideoColorRewrite(mode: string): void;
     get mediaInfo(): MediaInfo;
     get statisticsInfo(): any;
     _onLoggingConfigChanged(config: any): void;

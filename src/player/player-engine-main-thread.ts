@@ -380,6 +380,13 @@ class PlayerEngineMainThread implements PlayerEngine {
         this._transmuxer.switchAudioTrack(index);
     }
 
+    public setVideoColorRewrite(mode: string): void {
+        if (this._config) {
+            this._config.videoColorRewrite = mode;
+        }
+        this._transmuxer?.setVideoColorRewrite(mode);
+    }
+
     public get mediaInfo(): MediaInfo {
         return Object.assign({}, this._media_info);
     }

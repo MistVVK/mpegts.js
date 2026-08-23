@@ -34,6 +34,7 @@ import {
     WorkerCommandPacketTimeUpdate,
     WorkerCommandPacketReadyStateChange,
     WorkerCommandPacketSwitchAudio,
+    WorkerCommandPacketVideoColorRewrite,
 } from './player-engine-worker-cmd-def.js';
 import {
     WorkerMessagePacket,
@@ -133,6 +134,11 @@ const PlayerEngineWorker = (self: DedicatedWorkerGlobalScope) => {
             case 'switch_audio': {
                 const packet = command_packet as WorkerCommandPacketSwitchAudio;
                 transmuxer.switchAudioTrack(packet.audio_track);
+                break;
+            }
+            case 'video_color_rewrite': {
+                const packet = command_packet as WorkerCommandPacketVideoColorRewrite;
+                transmuxer.setVideoColorRewrite(packet.mode);
                 break;
             }
         }

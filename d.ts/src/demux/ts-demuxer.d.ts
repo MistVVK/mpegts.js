@@ -1,4 +1,5 @@
 import BaseDemuxer from './base-demuxer';
+import { type VideoColorRewriteMode } from './video-color-rewrite';
 declare class TSDemuxer extends BaseDemuxer {
     private readonly TAG;
     private config_;
@@ -35,6 +36,9 @@ declare class TSDemuxer extends BaseDemuxer {
     private audio_track_;
     preferred_audio_track_index: number;
     constructor(probe_data: any, config: any);
+    setVideoColorRewrite(mode: VideoColorRewriteMode | unknown): void;
+    private getVideoColorRewriteMode;
+    private applyVideoColorToMediaInfo;
     destroy(): void;
     static probe(buffer: ArrayBuffer): {
         needMoreData: boolean;

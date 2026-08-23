@@ -3,12 +3,14 @@
  * 既存の ExpGolomb は H.26x 向けの互換挙動として末尾の部分 word を返すため、
  * AV1 専用の境界検査付き bit reader を使用する。
  */
+import { type VideoColorRewriteMode, type VideoColorTuple } from './video-color-rewrite';
 declare class AV1BitReader {
     private readonly data_;
     private bit_offset_;
     constructor(data: Uint8Array);
     readBits(bits: number): number;
     readBool(): boolean;
+    getBitOffset(): number;
     readUEG(): number;
     destroy(): void;
 }
@@ -64,6 +66,10 @@ export type AV1Metadata = {
     ref_sample_duration: number;
     sequence_header: SequenceHeaderDetails;
     sequence_header_data: Uint8Array;
+    colour_primaries?: number;
+    transfer_characteristics?: number;
+    matrix_coeffs?: number;
+    color_bit_offset?: number;
     keyframe?: boolean;
     frame_rate: {
         fixed: boolean;
@@ -107,5 +113,11 @@ declare class AV1OBUParser {
     static getLevelString(level: number, tier: number): string;
     static getChromaFormat(mono_chrome: boolean, subsampling_x: number, subsampling_y: number): number;
     static getChromaFormatString(mono_chrome: boolean, subsampling_x: number, subsampling_y: number): string;
+    static rewriteSequenceHeaderOBU(obu: Uint8Array, mode: VideoColorRewriteMode | unknown): {
+        obu: Uint8Array;
+        original: VideoColorTuple;
+        effective: VideoColorTuple;
+        rewritten: boolean;
+    } | null;
 }
 export default AV1OBUParser;

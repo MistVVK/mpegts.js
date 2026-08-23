@@ -29,7 +29,8 @@ export type WorkerCommandOp =
     | 'readystatechange'
     | 'pause_transmuxer'
     | 'resume_transmuxer'
-    | 'switch_audio';
+    | 'switch_audio'
+    | 'video_color_rewrite';
 
 export type WorkerCommandPacket = {
     cmd: WorkerCommandOp,
@@ -64,4 +65,9 @@ export type WorkerCommandPacketReadyStateChange = WorkerCommandPacket & {
 export type WorkerCommandPacketSwitchAudio = WorkerCommandPacket & {
     cmd: 'switch_audio',
     audio_track: number,
+};
+
+export type WorkerCommandPacketVideoColorRewrite = WorkerCommandPacket & {
+    cmd: 'video_color_rewrite',
+    mode: string,
 };

@@ -64,7 +64,14 @@ export const defaultConfig = {
     // Headers added to exactly one HTTP request, then removed by the selected loader.
     // Keep this value structured-cloneable because MSE DedicatedWorker receives config via postMessage().
     oneShotHeaders: undefined,
-    customLoader: undefined
+    customLoader: undefined,
+
+    // Rewrite HEVC VUI / AV1 sequence-header CICP before remuxing.
+    // None: keep source signalling.
+    // ToneMap: HLG/PQ -> sRGB transfer and BT.709 primaries so the browser
+    //          emits coded values instead of taking its HDR display path.
+    // SdrInHlg: HLG transfer 18 -> 1 only (BT.2020 primaries/matrix stay).
+    videoColorRewrite: 'None',
 };
 
 export function createDefaultConfig() {

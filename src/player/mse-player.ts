@@ -115,6 +115,10 @@ class MSEPlayer {
         this._player_engine.switchAudioTrack(index);
     }
 
+    public setVideoColorRewrite(mode: string): void {
+        this._player_engine.setVideoColorRewrite(mode);
+    }
+
     public get type(): string {
         return this._type;
     }
