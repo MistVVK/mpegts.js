@@ -1501,14 +1501,19 @@ class TSDemuxer extends BaseDemuxer {
         if (new_details.colour_primaries !== this.video_metadata_.details.colour_primaries
             || new_details.transfer_characteristics !== this.video_metadata_.details.transfer_characteristics
             || new_details.matrix_coeffs !== this.video_metadata_.details.matrix_coeffs) {
+            // Colour/transfer/matrix だけの差は codec 変更にしない。
+            // ライブで videoColorRewrite を切り替えても新しい InitSegment を出さず、
+            // 以降の in-band SPS だけを書き換える。
             Log.v(this.TAG, `Video: Colour signalling changed from ` +
                             `${this.video_metadata_.details.colour_primaries}/` +
                             `${this.video_metadata_.details.transfer_characteristics}/` +
                             `${this.video_metadata_.details.matrix_coeffs} to ` +
                             `${new_details.colour_primaries}/` +
                             `${new_details.transfer_characteristics}/` +
-                            `${new_details.matrix_coeffs}`);
-            return true;
+                            `${new_details.matrix_coeffs}; keep current InitSegment`);
+            this.video_metadata_.details.colour_primaries = new_details.colour_primaries;
+            this.video_metadata_.details.transfer_characteristics = new_details.transfer_characteristics;
+            this.video_metadata_.details.matrix_coeffs = new_details.matrix_coeffs;
         }
 
         return false;
